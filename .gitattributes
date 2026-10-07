@@ -1,0 +1,17 @@
+# Normaliza finales de línea para evitar diffs falsos entre Windows y el CI (Linux).
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Binarios
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.mp4 binary
+*.docx binary
+*.pdf binary
+*.jar binary
+*.bin binary
