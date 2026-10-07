@@ -1,0 +1,9 @@
+# Revisores obligatorios por carpeta (opcional).
+# En fase solo-dev, esto documenta la intención de gobernanza para cuando
+# se incorporen más colaboradores; hoy Rafa es el único revisor disponible.
+
+/app/android/     @Rafa3312
+/app/ios/         @Rafa3312
+/app/lib/config/  @Rafa3312
+/firmware/        @Rafa3312
+/.github/         @Rafa3312

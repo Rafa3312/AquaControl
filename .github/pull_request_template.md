@@ -1,19 +1,15 @@
-## Descripción
-¿Qué cambia este PR y por qué?
+## Contexto
+- Módulo / Pantalla:
+- Historia / Issue relacionado: Closes #
+- Tipo de cambio: [Feature | Bugfix | Chore | UI/Test]
 
-## Historia relacionada
-Closes #
+## Checklist de calidad
+- [ ] La app compila sin advertencias críticas (`flutter analyze` en verde)
+- [ ] Las pruebas unitarias pasaron en el CI (`flutter test`)
+- [ ] No se introducen dependencias nativas sin justificación
+- [ ] Formato y convención de commits respetados (Conventional Commits)
+- [ ] Actualicé documentación relevante (README/docs/CONTRIBUTING) si aplica
+- [ ] Revisado por al menos un compañero de equipo (o autorrevisión documentada si es solo-dev)
 
-## Checklist
-- [ ] `flutter analyze` sin errores
-- [ ] `flutter test` en verde
-- [ ] Probado manualmente en dispositivo/emulador
-- [ ] Actualicé documentación relevante (README/docs) si aplica
-- [ ] Autorrevisión de código completada (checklist solo-dev) o revisor asignado
-
-## Tipo de cambio
-- [ ] feat
-- [ ] fix
-- [ ] docs
-- [ ] chore
-- [ ] refactor
+## Evidencia
+Captura de pantalla del componente, del check del CI en verde, o del estado del PR:
