@@ -15,7 +15,7 @@ jobs:
       - name: Validate commit messages (Conventional Commits)
         uses: wagoid/commitlint-github-action@v6
         with:
-          configFile: .github/commitlint.config.js
+          configFile: .github/commitlint.config.mjs
 
   pr-title:
     runs-on: ubuntu-latest
