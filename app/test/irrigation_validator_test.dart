@@ -1,5 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:aquacontrol/utils/irrigation_validator.dart';
+import 'package:irrigation_app/utils/irrigation_validator.dart';
 
 void main() {
   group('validateIrrigationProgram', () {
