@@ -1,0 +1,47 @@
+# --- General ---
+.DS_Store
+Thumbs.db
+*.log
+*.swp
+~$*
+.vscode/
+.idea/
+*.iml
+
+# --- Flutter / Dart (app/) ---
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.pub-cache/
+app/.pub/
+app/build/
+app/coverage/
+.scannerwork/
+app/**/doc/api/
+app/ios/Flutter/.last_build_id
+app/**/ephemeral/
+
+# Android
+app/android/.gradle/
+app/android/local.properties
+app/android/app/debug/
+app/android/app/profile/
+app/android/app/release/
+app/android/key.properties
+*.jks
+*.keystore
+
+# iOS
+app/ios/Pods/
+app/ios/.symlinks/
+
+# Configuración de Firebase: NO versionar (repo público).
+# En CI se recrea desde el secreto GOOGLE_SERVICES_JSON.
+google-services.json
+GoogleService-Info.plist
+
+# --- Firmware (Arduino / PlatformIO) ---
+firmware/**/build/
+firmware/**/.pio/
+*.bin
+!firmware/releases/*.bin
