@@ -53,3 +53,38 @@ jobs:
           name: app-debug-apk
           path: app/build/app/outputs/flutter-apk/app-debug.apk
           retention-days: 7
+
+  # Análisis estático + cobertura en SonarQube Cloud con Quality Gate.
+  # Requiere el secreto SONAR_TOKEN; sin él, el job se omite.
+  sonarqube:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    env:
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+    steps:
+      - name: Checkout
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # historial completo para detectar "código nuevo"
+
+      - name: Set up Flutter
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.3'
+          channel: 'stable'
+          cache: true
+
+      - name: Tests con cobertura
+        if: ${{ env.SONAR_TOKEN != '' }}
+        working-directory: app
+        run: |
+          flutter pub get
+          flutter test --coverage
+
+      - name: SonarQube Cloud scan + Quality Gate
+        if: ${{ env.SONAR_TOKEN != '' }}
+        uses: SonarSource/sonarqube-scan-action@v8
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
