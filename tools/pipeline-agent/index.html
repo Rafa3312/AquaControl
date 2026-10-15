@@ -1,0 +1,805 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agente del Pipeline CI · AquaControl</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel: #161b22; --panel-2: #1c2330; --border: #30363d;
+    --text: #e6edf3; --muted: #8b949e; --accent: #38bdf8;
+    --ok: #3fb950; --fail: #f85149; --run: #d29922; --idle: #6e7681; --block: #8b3a3a;
+    --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 "Segoe UI", system-ui, sans-serif; }
+  header { display: flex; flex-wrap: wrap; gap: 12px 20px; align-items: center; justify-content: space-between;
+           padding: 14px 24px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  .brand { display: flex; align-items: center; gap: 12px; }
+  .brand .logo { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center;
+                 background: linear-gradient(135deg, #0ea5e9, #22c55e); font-size: 20px; }
+  .brand h1 { font-size: 18px; margin: 0; }
+  .brand p { margin: 0; color: var(--muted); font-size: 13px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  input, select, button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--border);
+                          border-radius: 8px; padding: 6px 10px; }
+  button { cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); color: #04121c; border-color: var(--accent); font-weight: 600; }
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 9px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; }
+  label.chk { display: inline-flex; gap: 6px; align-items: center; color: var(--muted); font-size: 13px; }
+  main { padding: 20px 24px 32px; display: grid; gap: 18px; max-width: 1500px; margin: 0 auto; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px; }
+  .card h2 { margin: 0 0 12px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px 22px; align-items: center; color: var(--muted); font-size: 14px; }
+  .bar b { color: var(--text); font-weight: 600; }
+  .bar a { color: var(--accent); }
+  .badge { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+  .badge.sim { background: #6d28d9; color: #fff; }
+  .badge.live { background: #064e3b; color: #6ee7b7; }
+  .sim-panel { display: none; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .sim-panel.show { display: flex; }
+  .live-panel { display: none; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .live-panel.show { display: flex; }
+
+  /* ---------- pipeline ---------- */
+  .pipeline { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0; align-items: stretch; padding: 8px 0 4px; }
+  .stage { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 6px; }
+  .stage .node { position: relative; z-index: 2; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
+                 font-size: 26px; background: var(--panel-2); border: 3px solid var(--idle); transition: all .35s; }
+  .stage .conn { position: absolute; z-index: 1; top: 31px; left: calc(50% + 32px); right: calc(-50% + 32px); height: 4px;
+                 background: var(--border); border-radius: 2px; overflow: hidden; }
+  .stage:last-child .conn { display: none; }
+  .stage .conn i { position: absolute; inset: 0; width: 0; background: var(--ok); transition: width .6s; }
+  .stage.success .conn i { width: 100%; }
+  .stage.running .conn i { width: 100%; background: repeating-linear-gradient(90deg, var(--run) 0 10px, transparent 10px 20px);
+                           animation: flow 0.8s linear infinite; }
+  .stage .name { margin-top: 10px; font-weight: 700; font-size: 14px; }
+  .stage .tool { color: var(--muted); font-size: 12px; min-height: 18px; }
+  .stage .state { margin-top: 6px; font-size: 12px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--panel-2); color: var(--muted); }
+  .stage .time { font-family: var(--mono); font-size: 12px; color: var(--muted); margin-top: 3px; min-height: 18px; }
+  .stage.parallel .node::after { content: "∥"; position: absolute; top: -10px; right: -8px; font-size: 12px; background: var(--panel);
+                                 border: 1px solid var(--border); border-radius: 6px; padding: 0 4px; color: var(--muted); }
+
+  .stage.queued .node { border-style: dashed; }
+  .stage.running .node { border-color: var(--run); color: var(--run); animation: pulse 1.2s ease-in-out infinite; }
+  .stage.running .state { background: rgba(210,153,34,.18); color: var(--run); }
+  .stage.success .node { border-color: var(--ok); background: rgba(63,185,80,.14); }
+  .stage.success .state { background: rgba(63,185,80,.16); color: var(--ok); }
+  .stage.failure .node, .stage.cancelled .node { border-color: var(--fail); background: rgba(248,81,73,.16); animation: shake .5s 2; }
+  .stage.failure .state, .stage.cancelled .state { background: rgba(248,81,73,.18); color: var(--fail); }
+  .stage.failure .conn i { width: 100%; background: var(--fail); }
+  .stage.skipped .node { border-style: dashed; opacity: .6; background: repeating-linear-gradient(45deg, #1c2330 0 6px, #232b38 6px 12px); }
+  .stage.blocked .node { border-color: var(--block); opacity: .75; background: repeating-linear-gradient(45deg, #2a1a1d 0 6px, #331f22 6px 12px); }
+  .stage.blocked .state { color: #f0a3a0; background: rgba(139,58,58,.25); }
+  .stage.na { opacity: .4; }
+
+  @keyframes pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(210,153,34,.55); } 50% { box-shadow: 0 0 0 12px rgba(210,153,34,0); } }
+  @keyframes shake { 0%,100% { transform: translateX(0); } 25% { transform: translateX(-5px); } 75% { transform: translateX(5px); } }
+  @keyframes flow { from { background-position: 0 0; } to { background-position: 20px 0; } }
+  .progress { height: 6px; background: var(--panel-2); border-radius: 3px; overflow: hidden; margin-top: 14px; }
+  .progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .5s; }
+
+  /* ---------- agente ---------- */
+  .grid2 { display: grid; grid-template-columns: 1.35fr 1fr; gap: 18px; }
+  .verdict { display: flex; gap: 14px; align-items: flex-start; }
+  .verdict .big { font-size: 38px; line-height: 1; }
+  .verdict h3 { margin: 0; font-size: 22px; }
+  .verdict p { margin: 4px 0 0; color: var(--muted); }
+  .verdict.ok h3 { color: var(--ok); } .verdict.fail h3 { color: var(--fail); } .verdict.run h3 { color: var(--run); }
+  .section { margin-top: 14px; }
+  .section h4 { margin: 0 0 6px; font-size: 13px; color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+  .section ul { margin: 0; padding-left: 20px; }
+  .section li { margin: 3px 0; }
+  .evidence { font-family: var(--mono); font-size: 12.5px; background: #0b0f15; border: 1px solid var(--border); border-left: 3px solid var(--fail);
+              border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; margin: 0; }
+  code { font-family: var(--mono); background: #0b0f15; border: 1px solid var(--border); border-radius: 5px; padding: 1px 6px; font-size: 12.5px; }
+  .kpis { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 14px; }
+  .kpi { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .kpi span { display: block; color: var(--muted); font-size: 12px; }
+  .kpi b { font-size: 20px; }
+
+  .log { list-style: none; margin: 0; padding: 0; max-height: 360px; overflow: auto; font-size: 13.5px; }
+  .log li { display: grid; grid-template-columns: 70px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px dashed #222a35; }
+  .log time { font-family: var(--mono); color: var(--muted); font-size: 12px; }
+  .log .ok { color: var(--ok); } .log .fail { color: var(--fail); } .log .run { color: var(--run); } .log .info { color: var(--accent); }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+  tbody tr { cursor: pointer; } tbody tr:hover { background: var(--panel-2); }
+  tbody tr.sel { background: rgba(56,189,248,.10); }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; background: var(--idle); }
+  .dot.success { background: var(--ok); } .dot.failure { background: var(--fail); } .dot.running { background: var(--run); }
+  .mono { font-family: var(--mono); }
+  .warn { background: rgba(210,153,34,.12); border: 1px solid rgba(210,153,34,.4); color: #f2cc60; border-radius: 8px; padding: 8px 12px; font-size: 13.5px; }
+  .hidden { display: none !important; }
+  footer { text-align: center; color: var(--muted); font-size: 12px; padding-bottom: 20px; }
+
+  @media (max-width: 1000px) {
+    .pipeline { grid-template-columns: repeat(4, 1fr); row-gap: 22px; }
+    .stage:nth-child(4) .conn { display: none; }
+    .grid2 { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">
+    <div class="logo">💧</div>
+    <div>
+      <h1>Agente del Pipeline CI <span id="modeBadge" class="badge live">EN VIVO</span></h1>
+      <p>AquaControl · observa el pipeline, diagnostica fallas y recomienda cómo corregirlas</p>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="seg">
+      <button id="btnLive" class="active">En vivo (GitHub)</button>
+      <button id="btnSim">Simulación</button>
+    </div>
+    <div id="livePanel" class="live-panel show">
+      <input id="repo" size="22" value="Rafa3312/AquaControl" title="owner/repo">
+      <select id="branch" title="Rama a seguir"><option value="">Todas las ramas</option></select>
+      <input id="token" type="password" size="14" placeholder="Token (opcional)" title="Token de GitHub de solo lectura para evitar el límite de 60 peticiones/hora">
+      <button id="btnFollow" class="active" title="Seguir siempre la ejecución más reciente">Seguir la más reciente</button>
+    </div>
+    <div id="simPanel" class="sim-panel">
+      <button data-sim="ok">✅ Sin errores</button>
+      <button data-sim="test">❌ Falla en pruebas</button>
+      <button data-sim="lint">❌ Falla en lint</button>
+      <button data-sim="gate">❌ Falla Quality Gate</button>
+    </div>
+    <label class="chk"><input id="voice" type="checkbox"> Voz</label>
+  </div>
+</header>
+
+<main>
+  <div id="rateWarn" class="warn hidden"></div>
+
+  <section class="card">
+    <h2>Pipeline CI del proyecto</h2>
+    <div class="bar" id="commitBar">Esperando datos…</div>
+    <div class="pipeline" id="pipeline"></div>
+    <div class="progress"><i id="progress"></i></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Diagnóstico del agente</h2>
+      <div id="agent"></div>
+    </section>
+    <section class="card">
+      <h2>Bitácora del agente</h2>
+      <ul class="log" id="log"></ul>
+    </section>
+  </div>
+
+  <section class="card" id="historyCard">
+    <h2>Ejecuciones recientes</h2>
+    <table>
+      <thead><tr><th>Estado</th><th>Commit</th><th>Rama</th><th>Evento</th><th>Duración CI</th><th>Hace</th></tr></thead>
+      <tbody id="history"></tbody>
+    </table>
+  </section>
+</main>
+<footer>Fuente: API pública de GitHub Actions · Workflows <span class="mono">CI</span> y <span class="mono">Commit &amp; PR title rules</span></footer>
+
+<script>
+'use strict';
+
+// ════════════════════════════════════════════════════════════════════
+//  Modelo del pipeline: etapas en el orden "fail fast" del material
+//  (de menor a mayor costo). Cada etapa se alimenta de jobs/pasos
+//  reales de los workflows del repo.
+// ════════════════════════════════════════════════════════════════════
+const WF_CI = 'CI';
+const WF_RULES = 'Commit & PR title rules';
+
+const STAGES = [
+  { id: 'push',  name: 'Commit / Push',      tool: 'Git · GitHub',           icon: '⬆️', avg: 0 },
+  { id: 'rules', name: 'Convenciones',       tool: 'commitlint · pr-title',  icon: '📝', avg: 15, parallel: true,
+    src: [{ wf: WF_RULES, job: 'commitlint' }, { wf: WF_RULES, job: 'pr-title' }] },
+  { id: 'setup', name: 'Entorno',            tool: 'Checkout · Flutter',     icon: '🧰', avg: 25,
+    src: [{ wf: WF_CI, job: 'build-and-test', steps: ['Set up job', 'Checkout', 'Set up Flutter'] }] },
+  { id: 'deps',  name: 'Dependencias',       tool: 'flutter pub get',        icon: '📦', avg: 10,
+    src: [{ wf: WF_CI, job: 'build-and-test', steps: ['Install dependencies'] }] },
+  { id: 'lint',  name: 'Lint · Análisis',    tool: 'flutter analyze',        icon: '🔍', avg: 30,
+    src: [{ wf: WF_CI, job: 'build-and-test', steps: ['Static analysis'] }] },
+  { id: 'test',  name: 'Pruebas unitarias',  tool: 'flutter test',           icon: '🧪', avg: 15,
+    src: [{ wf: WF_CI, job: 'build-and-test', steps: ['Run tests'] }] },
+  { id: 'build', name: 'Build · Artefacto',  tool: 'APK debug',              icon: '🏗️', avg: 90,
+    src: [{ wf: WF_CI, job: 'build-and-test', steps: ['Restore google-services.json', 'Build debug APK', 'Upload APK'] }] },
+  { id: 'sast',  name: 'SAST · Quality Gate', tool: 'SonarQube Cloud',       icon: '🛡️', avg: 120,
+    src: [{ wf: WF_CI, job: 'sonarqube', steps: ['Tests con cobertura', 'SonarQube Cloud scan + Quality Gate'] }] },
+];
+const CI_STAGES = ['setup', 'deps', 'lint', 'test', 'build', 'sast'];
+const STAGE = Object.fromEntries(STAGES.map((s) => [s.id, s]));
+
+const STATE_LABEL = {
+  pending: 'En espera', queued: 'En cola', running: 'Ejecutando', success: 'Correcto',
+  failure: 'Falló', cancelled: 'Cancelado', skipped: 'Omitida', blocked: 'Bloqueada', na: 'No aplica',
+};
+
+// ════════════════════════════════════════════════════════════════════
+//  Base de conocimiento del agente: qué significa que falle cada etapa
+//  y qué hacer. Los patrones sobre la evidencia (anotaciones de GitHub)
+//  refinan la causa.
+// ════════════════════════════════════════════════════════════════════
+const KB = {
+  rules: {
+    what: 'El mensaje de un commit o el título del Pull Request no sigue Conventional Commits.',
+    fix: ['Usa el formato <code>tipo: descripción</code> con un tipo permitido: feat, fix, docs, chore, refactor, test, ci.',
+          'Título del PR: edítalo en GitHub (lápiz junto al título); el check se re-ejecuta solo.',
+          'Último commit de tu rama: <code>git commit --amend -m "fix: descripción"</code> y <code>git push --force-with-lease</code>.'],
+  },
+  setup: {
+    what: 'No se pudo preparar el entorno (checkout del repositorio o instalación de Flutter).',
+    fix: ['Verifica que <code>flutter-version</code> en <code>ci.yml</code> exista (3.27.3).',
+          'Suele ser una falla temporal de GitHub: usa <b>Re-run failed jobs</b>.'],
+  },
+  deps: {
+    what: '<code>flutter pub get</code> no pudo resolver las dependencias.',
+    fix: ['Ejecuta <code>cd app && flutter pub get</code> en tu equipo.',
+          'Revisa las versiones de <code>app/pubspec.yaml</code> y sube también <code>pubspec.lock</code>.'],
+  },
+  lint: {
+    what: '<code>flutter analyze</code> encontró errores de sintaxis, tipos o imports. El código ni siquiera llegó a probarse.',
+    fix: ['Ejecuta <code>cd app && flutter analyze</code> y corrige las líneas marcadas como <b>error</b>.',
+          'Los warnings e infos no detienen el pipeline; solo los errores.'],
+  },
+  test: {
+    what: 'Al menos una prueba unitaria falló: un <i>assert</i> no obtuvo el valor esperado (posible regresión).',
+    fix: ['Ejecuta <code>cd app && flutter test</code> para reproducirlo.',
+          'Compara <b>Expected</b> vs <b>Actual</b> en el log del paso <i>Run tests</i>.',
+          'Si el cambio de comportamiento fue intencional, actualiza la prueba; si no, corrige el código.'],
+  },
+  build: {
+    what: 'No se pudo compilar o publicar el APK (artefacto).',
+    fix: ['Ejecuta <code>cd app && flutter build apk --debug</code> en tu equipo.',
+          'Verifica que el secreto <code>GOOGLE_SERVICES_JSON</code> tenga el contenido completo de <code>google-services.json</code>.'],
+  },
+  sast: {
+    what: 'SonarQube Cloud rechazó el código nuevo: no pasó el Quality Gate.',
+    fix: ['Abre el análisis del PR en sonarcloud.io para ver qué condición falló.',
+          'Cobertura del código nuevo ≥ 80 %: agrega pruebas para las líneas nuevas.',
+          'Corrige bugs, vulnerabilidades o code smells nuevos; si el error es de autenticación, revisa el secreto <code>SONAR_TOKEN</code>.'],
+  },
+};
+
+const PATTERNS = [
+  { re: /No release type found in pull request title|pull request title/i, cause: 'El <b>título del PR</b> no empieza con un tipo válido (ej. <code>feat:</code>).' },
+  { re: /type must be one of|type may not be empty|subject may not be empty|header must not be longer|You have commit messages with errors/i, cause: 'Un <b>mensaje de commit</b> no cumple Conventional Commits.' },
+  { re: /configFile|\.js extension is not allowed/i, cause: 'La configuración de commitlint no es válida para la versión de la action.' },
+  { re: /can't be assigned|isn't defined|Undefined name|Expected to find|invalid_assignment|error •/i, cause: 'El analizador encontró un <b>error de tipos o sintaxis</b> en el código Dart.' },
+  { re: /Expected:|Actual:|Some tests failed|Test failed/i, cause: 'Un <b>assert</b> de una prueba no coincidió con el valor esperado.' },
+  { re: /version solving failed|pub get failed/i, cause: 'Hay <b>versiones de paquetes incompatibles</b> en pubspec.yaml.' },
+  { re: /QUALITY GATE STATUS: FAILED|Quality Gate.*fail/i, cause: 'El <b>Quality Gate</b> de SonarQube quedó en Failed.' },
+  { re: /SONAR_TOKEN|Not authorized|401/i, cause: 'SonarQube no aceptó el <b>token</b> de autenticación.' },
+];
+const NOISE = /deprecated|ubuntu-latest label|will migrate|Node\.js 20/i;
+
+// ════════════════════════════════════════════════════════════════════
+//  Utilidades
+// ════════════════════════════════════════════════════════════════════
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+const ms = (iso) => (iso ? new Date(iso).getTime() : null);
+function fmtDur(sec) {
+  if (sec == null || !isFinite(sec)) return '';
+  sec = Math.max(0, Math.round(sec));
+  const m = Math.floor(sec / 60), s = sec % 60;
+  return m ? `${m} min ${String(s).padStart(2, '0')} s` : `${s} s`;
+}
+function ago(t) {
+  const s = (Date.now() - t) / 1000;
+  if (s < 60) return 'segundos';
+  if (s < 3600) return `${Math.floor(s / 60)} min`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h`;
+  return `${Math.floor(s / 86400)} d`;
+}
+const clock = () => new Date().toLocaleTimeString('es-MX', { hour12: false });
+function storage(key, val) {
+  try {
+    if (val === undefined) return sessionStorage.getItem(key);
+    if (val) sessionStorage.setItem(key, val); else sessionStorage.removeItem(key);
+  } catch (_) { return null; }
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Agente: percibe el modelo, razona (diagnóstico) y actúa
+//  (bitácora, voz, recomendaciones).
+// ════════════════════════════════════════════════════════════════════
+const agent = {
+  prevKey: null,
+  prev: {},
+  lastVerdict: null,
+
+  log(text, cls = 'info') {
+    const li = document.createElement('li');
+    li.innerHTML = `<time>${clock()}</time><span class="${cls}">${text}</span>`;
+    $('log').prepend(li);
+    while ($('log').children.length > 80) $('log').lastChild.remove();
+  },
+
+  say(text) {
+    if (!$('voice').checked || !('speechSynthesis' in window)) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'es-MX';
+    speechSynthesis.cancel();
+    speechSynthesis.speak(u);
+  },
+
+  observe(m) {
+    const key = `${m.source}:${m.sha}:${m.runKey || ''}`;
+    if (key !== this.prevKey) {
+      this.prevKey = key;
+      this.prev = {};
+      this.lastVerdict = null;
+      this.log(`Nuevo cambio detectado en <b>${esc(m.branch)}</b> (<span class="mono">${esc(m.shortSha)}</span>): “${esc(m.message)}” por ${esc(m.actor)}.`, 'info');
+    }
+    for (const s of STAGES) {
+      const cur = m.stages[s.id];
+      const before = this.prev[s.id];
+      if (!cur || cur.status === before) continue;
+      const dur = cur.end && cur.start ? ` en ${fmtDur((cur.end - cur.start) / 1000)}` : '';
+      if (cur.status === 'running') this.log(`▶ Ejecutando <b>${s.name}</b> (${s.tool}).`, 'run');
+      else if (cur.status === 'success' && s.id !== 'push') this.log(`✔ <b>${s.name}</b> superada${dur}.`, 'ok');
+      else if (cur.status === 'failure' || cur.status === 'cancelled') { this.log(`✖ <b>${s.name}</b> falló${dur}.`, 'fail'); }
+      else if (cur.status === 'blocked') this.log(`⏹ <b>${s.name}</b> no se ejecutó: el pipeline se detuvo antes (fail fast).`, 'fail');
+      else if (cur.status === 'skipped' && before) this.log(`↷ <b>${s.name}</b> omitida.`, 'info');
+      this.prev[s.id] = cur.status;
+    }
+    const d = this.diagnose(m);
+    if (d.level !== this.lastVerdict && (d.level === 'ok' || d.level === 'fail')) {
+      this.log(d.level === 'ok' ? `🟢 ${d.title}. ${d.short}` : `🔴 ${d.title}. ${d.short}`, d.level === 'ok' ? 'ok' : 'fail');
+      this.say(d.level === 'ok' ? 'Pipeline exitoso.' : `Atención: ${d.title}.`);
+    }
+    this.lastVerdict = d.level;
+    return d;
+  },
+
+  diagnose(m) {
+    const st = m.stages;
+    const failed = STAGES.find((s) => ['failure', 'cancelled'].includes(st[s.id]?.status));
+    const running = STAGES.find((s) => st[s.id]?.status === 'running');
+    const done = m.ciStatus === 'completed' && (!m.rulesStatus || m.rulesStatus === 'completed');
+    const elapsed = m.start ? ((m.end || Date.now()) - m.start) / 1000 : null;
+
+    if (failed) {
+      const kb = KB[failed.id];
+      const evidence = (m.annotations[failed.id] || []).slice(0, 3);
+      const causes = [];
+      for (const p of PATTERNS) if (evidence.some((e) => p.re.test(e))) causes.push(p.cause);
+      const blocked = STAGES.filter((s) => st[s.id]?.status === 'blocked');
+      const saved = blocked.reduce((a, s) => a + s.avg, 0);
+      return {
+        level: done ? 'fail' : 'fail-running',
+        icon: '🔴',
+        title: `Falló en «${failed.name}»`,
+        short: kb.what.replace(/<[^>]+>/g, ''),
+        what: kb.what,
+        causes,
+        evidence,
+        fix: kb.fix,
+        impact: failed.parallel
+          ? 'Esta validación corre en paralelo al CI: el resto puede pasar, pero el ruleset impedirá el merge hasta corregirla.'
+          : (blocked.length
+            ? `Fail fast: ${blocked.map((s) => `<b>${s.name}</b>`).join(', ')} no se ejecutaron. Se evitaron ≈ ${fmtDur(saved)} de cómputo y el merge queda bloqueado por el ruleset.`
+            : 'El merge queda bloqueado por el ruleset hasta que el check esté en verde.'),
+        elapsed,
+      };
+    }
+    if (running || !done) {
+      const cur = running || STAGES.find((s) => ['queued', 'pending'].includes(st[s.id]?.status));
+      const idx = cur ? STAGES.indexOf(cur) : -1;
+      const next = STAGES.slice(idx + 1).find((s) => !['na', 'skipped'].includes(st[s.id]?.status));
+      const avgTotal = m.avgCi || STAGES.reduce((a, s) => a + s.avg, 0);
+      const eta = elapsed != null ? avgTotal - elapsed : null;
+      return {
+        level: 'run', icon: '🟡',
+        title: cur ? `Ejecutando «${cur.name}»` : 'Pipeline en cola',
+        short: '',
+        what: cur ? `${cur.tool} en curso${next ? `. Siguiente etapa: <b>${next.name}</b>` : ''}.` : 'GitHub está asignando un runner.',
+        notes: eta != null && eta > 0 ? [`Tiempo estimado restante ≈ ${fmtDur(eta)} (según el promedio de ejecuciones anteriores).`] : [],
+        elapsed,
+      };
+    }
+    const notes = [];
+    if (st.build?.status === 'skipped') notes.push('El APK no se generó porque no existe el secreto <code>GOOGLE_SERVICES_JSON</code>. Agrégalo para que el pipeline entregue el artefacto.');
+    if (st.sast?.status === 'skipped') notes.push('El análisis de SonarQube se omitió: falta el secreto <code>SONAR_TOKEN</code>.');
+    if (st.rules?.status === 'na') notes.push('Las reglas de commits solo se validan en Pull Requests; este fue un push directo.');
+    if (m.avgCi && elapsed) {
+      const diff = elapsed - m.avgCi;
+      notes.push(Math.abs(diff) < 10 ? 'Duración en línea con el promedio.' : `Duración ${diff > 0 ? 'mayor' : 'menor'} que el promedio por ${fmtDur(Math.abs(diff))}.`);
+    }
+    const slow = STAGES.filter((s) => st[s.id]?.start && st[s.id]?.end)
+      .sort((a, b) => (st[b.id].end - st[b.id].start) - (st[a.id].end - st[a.id].start))[0];
+    if (slow) notes.push(`Etapa más lenta: <b>${slow.name}</b> (${fmtDur((st[slow.id].end - st[slow.id].start) / 1000)}).`);
+    return {
+      level: 'ok', icon: '🟢', title: 'Pipeline exitoso',
+      short: `Todas las etapas en verde${elapsed ? ` en ${fmtDur(elapsed)}` : ''}. El cambio puede integrarse.`,
+      what: 'Todas las etapas requeridas pasaron: el código compila, cumple el análisis estático, las pruebas pasan y el Quality Gate lo aprueba. El PR puede mergearse.',
+      notes, elapsed,
+    };
+  },
+};
+
+// ════════════════════════════════════════════════════════════════════
+//  Render
+// ════════════════════════════════════════════════════════════════════
+function buildPipelineDom() {
+  $('pipeline').innerHTML = STAGES.map((s) => `
+    <div class="stage pending${s.parallel ? ' parallel' : ''}" id="st-${s.id}">
+      <div class="node">${s.icon}</div><div class="conn"><i></i></div>
+      <div class="name">${s.name}</div><div class="tool">${s.tool}</div>
+      <div class="state">En espera</div><div class="time"></div>
+    </div>`).join('');
+}
+
+let lastModel = null;
+function render(m, d) {
+  lastModel = m;
+  const prLink = m.prNumber ? ` · <a href="${esc(m.prUrl)}" target="_blank" rel="noopener">PR #${m.prNumber}</a>` : '';
+  const runLink = m.runUrl ? ` · <a href="${esc(m.runUrl)}" target="_blank" rel="noopener">Ver en GitHub</a>` : '';
+  $('commitBar').innerHTML = `
+    <span>Commit <b class="mono">${esc(m.shortSha)}</b> “${esc(m.message)}”</span>
+    <span>Rama <b>${esc(m.branch)}</b></span><span>Evento <b>${esc(m.event)}</b></span>
+    <span>Autor <b>${esc(m.actor)}</b>${prLink}${runLink}</span>`;
+
+  let completed = 0, total = 0;
+  for (const s of STAGES) {
+    const cur = m.stages[s.id] || { status: 'pending' };
+    const el = $(`st-${s.id}`);
+    el.className = `stage ${cur.status}${s.parallel ? ' parallel' : ''}`;
+    el.querySelector('.state').textContent = STATE_LABEL[cur.status] || cur.status;
+    const t = cur.start ? ((cur.end || Date.now()) - cur.start) / 1000 : null;
+    el.querySelector('.time').textContent = cur.status === 'running' ? `⏱ ${fmtDur(t)}` : (cur.end && t != null ? fmtDur(t) : '');
+    if (cur.status !== 'na') { total++; if (!['pending', 'queued', 'running'].includes(cur.status)) completed++; }
+  }
+  $('progress').style.width = `${total ? (completed / total) * 100 : 0}%`;
+  $('progress').style.background = d.level.startsWith('fail') ? 'var(--fail)' : d.level === 'ok' ? 'var(--ok)' : 'var(--accent)';
+
+  const cls = d.level.startsWith('fail') ? 'fail' : d.level === 'ok' ? 'ok' : 'run';
+  let html = `<div class="verdict ${cls}"><div class="big">${d.icon}</div><div>
+      <h3>${d.title}</h3><p>${d.elapsed ? `Tiempo transcurrido: ${fmtDur(d.elapsed)}` : ''}</p></div></div>
+    <div class="section"><h4>Qué pasó</h4><div>${d.what}</div></div>`;
+  if (d.causes?.length) html += `<div class="section"><h4>Causa probable</h4><ul>${d.causes.map((c) => `<li>${c}</li>`).join('')}</ul></div>`;
+  if (d.evidence?.length) html += `<div class="section"><h4>Evidencia (log de GitHub)</h4>${d.evidence.map((e) => `<pre class="evidence">${esc(e.slice(0, 400))}</pre>`).join('')}</div>`;
+  if (d.fix?.length) html += `<div class="section"><h4>Cómo corregirlo</h4><ul>${d.fix.map((f) => `<li>${f}</li>`).join('')}</ul></div>`;
+  if (d.impact) html += `<div class="section"><h4>Impacto</h4><div>${d.impact}</div></div>`;
+  if (d.notes?.length) html += `<div class="section"><h4>Observaciones del agente</h4><ul>${d.notes.map((n) => `<li>${n}</li>`).join('')}</ul></div>`;
+  if (m.stats) {
+    html += `<div class="kpis">
+      <div class="kpi"><span>Éxito CI (últimas ${m.stats.n})</span><b>${m.stats.rate}%</b></div>
+      <div class="kpi"><span>Duración promedio CI</span><b>${fmtDur(m.stats.avg)}</b></div>
+      <div class="kpi"><span>Peticiones API restantes</span><b>${m.stats.rateLimit ?? '—'}</b></div></div>`;
+  }
+  $('agent').innerHTML = html;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Estado de etapas a partir de jobs/pasos de GitHub
+// ════════════════════════════════════════════════════════════════════
+function fromGh(status, conclusion) {
+  if (status === 'completed') return conclusion === 'neutral' ? 'success' : (conclusion || 'success');
+  if (status === 'in_progress') return 'running';
+  if (status === 'queued' || status === 'waiting' || status === 'requested') return 'queued';
+  return 'pending';
+}
+function combine(sts) {
+  if (!sts.length) return 'pending';
+  if (sts.includes('failure') || sts.includes('timed_out')) return 'failure';
+  if (sts.includes('cancelled')) return 'cancelled';
+  if (sts.includes('running')) return 'running';
+  const done = sts.filter((s) => s === 'success' || s === 'skipped');
+  if (done.length === sts.length) return sts.includes('success') ? 'success' : 'skipped';
+  if (done.length) return 'running';
+  if (sts.includes('queued')) return 'queued';
+  return 'pending';
+}
+
+function stageFromJobs(stage, jobsByWf) {
+  const sts = [], starts = [], ends = [];
+  for (const src of stage.src) {
+    const job = (jobsByWf[src.wf] || []).find((j) => j.name === src.job);
+    if (!job) { sts.push('pending'); continue; }
+    if (!src.steps) {
+      sts.push(fromGh(job.status, job.conclusion));
+      if (job.started_at) starts.push(ms(job.started_at));
+      if (job.completed_at) ends.push(ms(job.completed_at));
+      continue;
+    }
+    for (const name of src.steps) {
+      const step = (job.steps || []).find((x) => x.name === name);
+      if (!step) { sts.push(job.status === 'completed' ? 'skipped' : 'pending'); continue; }
+      sts.push(fromGh(step.status, step.conclusion));
+      if (step.started_at && step.conclusion !== 'skipped') starts.push(ms(step.started_at));
+      if (step.completed_at && step.conclusion !== 'skipped') ends.push(ms(step.completed_at));
+    }
+  }
+  const status = combine(sts);
+  return { status, start: starts.length ? Math.min(...starts) : null, end: status === 'running' ? null : (ends.length ? Math.max(...ends) : null) };
+}
+
+function finalize(stages, { ciDone, rulesExists, event }) {
+  if (!rulesExists) stages.rules = { status: event === 'push' ? 'na' : 'pending' };
+  if (ciDone) for (const id of CI_STAGES) if (['pending', 'queued'].includes(stages[id].status)) stages[id].status = 'skipped';
+  const failIdx = CI_STAGES.findIndex((id) => ['failure', 'cancelled'].includes(stages[id].status));
+  if (failIdx >= 0) {
+    for (const id of CI_STAGES.slice(failIdx + 1)) {
+      if (['skipped', 'pending', 'queued'].includes(stages[id].status)) stages[id] = { status: 'blocked' };
+    }
+  }
+  return stages;
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Modo EN VIVO: GitHub REST API
+// ════════════════════════════════════════════════════════════════════
+const live = {
+  timer: null, follow: true, pinnedSha: null, rateLimit: null,
+  jobsCache: new Map(), annCache: new Map(), groups: [],
+
+  async gh(path) {
+    const headers = { Accept: 'application/vnd.github+json' };
+    const tok = $('token').value.trim();
+    if (tok) headers.Authorization = `Bearer ${tok}`;
+    const res = await fetch(`https://api.github.com${path}`, { headers, cache: 'no-cache' });
+    const rem = res.headers.get('x-ratelimit-remaining');
+    if (rem != null) this.rateLimit = Number(rem);
+    if (res.status === 403 || res.status === 429) {
+      const reset = Number(res.headers.get('x-ratelimit-reset')) * 1000;
+      throw new Error(`Límite de la API de GitHub alcanzado${reset ? `; se libera a las ${new Date(reset).toLocaleTimeString('es-MX')}` : ''}. Agrega un token de solo lectura.`);
+    }
+    if (res.status === 404) throw new Error(`No se encontró el repositorio “${$('repo').value}” (¿es público?).`);
+    if (!res.ok) throw new Error(`GitHub respondió ${res.status}.`);
+    return res.json();
+  },
+
+  async jobs(run) {
+    const c = this.jobsCache.get(run.id);
+    if (c && c.updated === run.updated_at && run.status === 'completed') return c.jobs;
+    const data = await this.gh(`/repos/${this.repo()}/actions/runs/${run.id}/jobs?per_page=50`);
+    this.jobsCache.set(run.id, { updated: run.updated_at, jobs: data.jobs });
+    return data.jobs;
+  },
+
+  async annotations(job) {
+    if (this.annCache.has(job.id)) return this.annCache.get(job.id);
+    const data = await this.gh(`/repos/${this.repo()}/check-runs/${job.id}/annotations`);
+    const msgs = data.filter((a) => a.annotation_level === 'failure' || !NOISE.test(a.message))
+      .map((a) => a.message).filter((msg) => !NOISE.test(msg));
+    if (job.status === 'completed') this.annCache.set(job.id, msgs);
+    return msgs;
+  },
+
+  repo() { return $('repo').value.trim(); },
+
+  async tick() {
+    clearTimeout(this.timer);
+    let anyRunning = false;
+    try {
+      const data = await this.gh(`/repos/${this.repo()}/actions/runs?per_page=40`);
+      const runs = data.workflow_runs.filter((r) => r.name === WF_CI || r.name === WF_RULES);
+      this.updateBranches(runs);
+      const branch = $('branch').value;
+      const map = new Map();
+      for (const r of runs) {
+        if (branch && r.head_branch !== branch) continue;
+        if (!map.has(r.head_sha)) map.set(r.head_sha, { sha: r.head_sha, runs: [], created: ms(r.created_at) });
+        const g = map.get(r.head_sha);
+        g.runs.push(r);
+        g.created = Math.max(g.created, ms(r.created_at));
+      }
+      this.groups = [...map.values()].sort((a, b) => b.created - a.created);
+      for (const g of this.groups) {
+        g.ci = g.runs.filter((r) => r.name === WF_CI).sort((a, b) => ms(b.created_at) - ms(a.created_at))[0];
+        g.rules = g.runs.filter((r) => r.name === WF_RULES).sort((a, b) => ms(b.created_at) - ms(a.created_at))[0];
+      }
+      const stats = this.stats();
+      const target = this.follow ? this.groups[0] : this.groups.find((g) => g.sha === this.pinnedSha) || this.groups[0];
+      if (!target) {
+        $('commitBar').textContent = 'No hay ejecuciones de los workflows CI en este repositorio/rama.';
+        renderHistory([], null);
+      } else {
+        const m = await this.model(target, stats);
+        anyRunning = m.ciStatus !== 'completed' || (m.rulesStatus && m.rulesStatus !== 'completed');
+        const d = agent.observe(m);
+        render(m, d);
+        renderHistory(this.groups.slice(0, 10), target.sha);
+      }
+      $('rateWarn').classList.toggle('hidden', !(this.rateLimit != null && this.rateLimit < 15 && !$('token').value));
+      $('rateWarn').textContent = `Quedan ${this.rateLimit} peticiones a la API de GitHub esta hora. Para grabar sin cortes, agrega un token de solo lectura en el campo “Token”.`;
+    } catch (e) {
+      $('rateWarn').classList.remove('hidden');
+      $('rateWarn').textContent = `⚠ ${e.message}`;
+    }
+    const slow = this.rateLimit != null && this.rateLimit < 10;
+    this.timer = setTimeout(() => this.tick(), slow ? 60000 : anyRunning ? 7000 : 20000);
+  },
+
+  stats() {
+    const ci = this.groups.map((g) => g.ci).filter((r) => r && r.status === 'completed').slice(0, 10);
+    const okRuns = ci.filter((r) => r.conclusion === 'success');
+    const durs = okRuns.map((r) => (ms(r.updated_at) - ms(r.run_started_at || r.created_at)) / 1000).filter((x) => x > 0);
+    return {
+      n: ci.length,
+      rate: ci.length ? Math.round((okRuns.length / ci.length) * 100) : 0,
+      avg: durs.length ? durs.reduce((a, b) => a + b, 0) / durs.length : null,
+    };
+  },
+
+  async model(g, stats) {
+    const ref = g.ci || g.rules;
+    const jobsByWf = {};
+    if (g.ci) jobsByWf[WF_CI] = await this.jobs(g.ci);
+    if (g.rules) jobsByWf[WF_RULES] = await this.jobs(g.rules);
+    const stages = { push: { status: 'success', start: ms(ref.created_at), end: ms(ref.created_at) } };
+    for (const s of STAGES.slice(1)) stages[s.id] = stageFromJobs(s, jobsByWf);
+    finalize(stages, { ciDone: g.ci?.status === 'completed', rulesExists: !!g.rules, event: ref.event });
+
+    const annotations = {};
+    for (const s of STAGES) {
+      if (!['failure', 'cancelled'].includes(stages[s.id].status)) continue;
+      const msgs = [];
+      for (const src of s.src || []) {
+        const job = (jobsByWf[src.wf] || []).find((j) => j.name === src.job);
+        if (job && job.conclusion === 'failure') msgs.push(...await this.annotations(job));
+      }
+      annotations[s.id] = [...new Set(msgs)];
+    }
+    const pr = ref.pull_requests?.[0];
+    // La duración se mide sobre el workflow CI: las reglas pueden re-ejecutarse
+    // mucho después (por ejemplo, al editar el título del PR).
+    const timed = g.ci || ref;
+    const done = [g.ci, g.rules].filter(Boolean).every((r) => r.status === 'completed');
+    return {
+      source: 'live', sha: g.sha, shortSha: g.sha.slice(0, 7), runKey: `${g.ci?.id}-${g.rules?.id}`,
+      branch: ref.head_branch, message: (ref.head_commit?.message || '').split('\n')[0], actor: ref.actor?.login || '',
+      event: ref.event, prNumber: pr?.number, prUrl: pr ? `https://github.com/${this.repo()}/pull/${pr.number}` : null,
+      runUrl: (g.ci || ref).html_url, ciStatus: g.ci?.status || 'queued', rulesStatus: g.rules?.status,
+      start: ms(timed.run_started_at || timed.created_at), end: done ? ms(timed.updated_at) : null,
+      stages, annotations, avgCi: stats.avg, stats: { ...stats, rateLimit: this.rateLimit },
+    };
+  },
+
+  updateBranches(runs) {
+    const sel = $('branch');
+    const cur = sel.value;
+    const names = [...new Set(runs.map((r) => r.head_branch))];
+    const have = [...sel.options].map((o) => o.value);
+    if (names.every((n) => have.includes(n))) return;
+    sel.innerHTML = '<option value="">Todas las ramas</option>' + names.map((n) => `<option>${esc(n)}</option>`).join('');
+    sel.value = cur;
+  },
+
+  start() { this.tick(); },
+  stop() { clearTimeout(this.timer); },
+};
+
+function renderHistory(groups, selSha) {
+  $('history').innerHTML = groups.map((g) => {
+    const ref = g.ci || g.rules;
+    const runs = [g.ci, g.rules].filter(Boolean);
+    const st = runs.some((r) => r.status !== 'completed') ? 'running'
+      : runs.some((r) => r.conclusion === 'failure') ? 'failure' : 'success';
+    const dur = g.ci && g.ci.status === 'completed' ? fmtDur((ms(g.ci.updated_at) - ms(g.ci.run_started_at || g.ci.created_at)) / 1000) : '—';
+    return `<tr data-sha="${g.sha}" class="${g.sha === selSha ? 'sel' : ''}">
+      <td><span class="dot ${st}"></span>${{ running: 'En curso', failure: 'Falló', success: 'Correcto' }[st]}</td>
+      <td><span class="mono">${g.sha.slice(0, 7)}</span> ${esc((ref.head_commit?.message || '').split('\n')[0].slice(0, 60))}</td>
+      <td>${esc(ref.head_branch)}</td><td>${esc(ref.event)}</td><td>${dur}</td><td>${ago(g.created)}</td></tr>`;
+  }).join('');
+}
+
+// ════════════════════════════════════════════════════════════════════
+//  Modo SIMULACIÓN: reproduce escenarios del video de clase
+// ════════════════════════════════════════════════════════════════════
+const SIM = {
+  ok:   { msg: 'feat: agrega validación de horario', fail: null },
+  test: { msg: 'test: cambia resultado esperado del validador', fail: 'test',
+          ann: ['Expected: <true>\n  Actual: <false>\n\npackage:matcher expect\ntest/irrigation_validator_test.dart 13:7  main.<fn>.<fn>\n\nSome tests failed.'] },
+  lint: { msg: 'feat: agrega variable de demo', fail: 'lint',
+          ann: ["error • A value of type 'String' can't be assigned to a variable of type 'int' • lib/utils/irrigation_validator.dart:31:17 • invalid_assignment\n\n1 issue found.", 'Process completed with exit code 1.'] },
+  gate: { msg: 'feat: agrega reportes sin pruebas', fail: 'sast',
+          ann: ['QUALITY GATE STATUS: FAILED - Coverage on New Code 41.2% (required ≥ 80%)'] },
+};
+const SIM_DUR = { rules: 5, setup: 4, deps: 3, lint: 4, test: 4, build: 5, sast: 6 };
+
+const sim = {
+  timer: null,
+  run(kind) {
+    clearInterval(this.timer);
+    const sc = SIM[kind];
+    const t0 = Date.now() + 800;
+    const sha = Math.random().toString(16).slice(2, 9) + '0000000';
+    // Línea de tiempo del CI (secuencial) y de reglas (paralela)
+    const plan = {}; let t = 0;
+    for (const id of CI_STAGES) { plan[id] = { from: t, to: t + SIM_DUR[id] }; t += SIM_DUR[id]; }
+    plan.rules = { from: 0.5, to: 0.5 + SIM_DUR.rules };
+    const failAt = sc.fail ? plan[sc.fail].to : Infinity;
+    const end = sc.fail ? failAt : t;
+    agent.log(`Simulación iniciada: <b>${kind === 'ok' ? 'sin errores' : 'con error en ' + STAGE[sc.fail].name}</b>.`, 'info');
+
+    const tick = () => {
+      const now = (Date.now() - t0) / 1000;
+      const stages = { push: { status: now >= 0 ? 'success' : 'running', start: t0, end: t0 } };
+      for (const id of ['rules', ...CI_STAGES]) {
+        const p = plan[id];
+        const abs = (x) => t0 + x * 1000;
+        let status = 'pending';
+        if (id !== 'rules' && p.from >= failAt) status = now >= failAt ? 'blocked' : 'pending';
+        else if (now >= p.to) status = id === sc.fail ? 'failure' : 'success';
+        else if (now >= p.from) status = 'running';
+        else if (now >= 0 && (id === 'setup' || id === 'rules')) status = 'queued';
+        stages[id] = { status, start: now >= p.from && status !== 'blocked' ? abs(p.from) : null, end: now >= p.to && status !== 'blocked' ? abs(p.to) : null };
+      }
+      const finished = now >= Math.max(end, plan.rules.to);
+      const m = {
+        source: 'sim', sha, shortSha: sha.slice(0, 7), runKey: kind + t0, branch: 'feature/demo-pipeline', message: sc.msg,
+        actor: 'equipo-aquacontrol', event: 'pull_request', prNumber: null, runUrl: null,
+        ciStatus: finished ? 'completed' : 'in_progress', rulesStatus: now >= plan.rules.to ? 'completed' : 'in_progress',
+        start: t0, end: finished ? t0 + Math.max(end, plan.rules.to) * 1000 : null,
+        stages, annotations: sc.fail ? { [sc.fail]: sc.ann } : {},
+        avgCi: Object.values(SIM_DUR).reduce((a, b) => a + b, 0) - SIM_DUR.rules,
+        stats: null,
+      };
+      const d = agent.observe(m);
+      render(m, d);
+      if (finished) clearInterval(this.timer);
+    };
+    tick();
+    this.timer = setInterval(tick, 250);
+  },
+  stop() { clearInterval(this.timer); },
+};
+
+// ════════════════════════════════════════════════════════════════════
+//  Arranque y controles
+// ════════════════════════════════════════════════════════════════════
+function setMode(mode) {
+  const isLive = mode === 'live';
+  $('btnLive').classList.toggle('active', isLive);
+  $('btnSim').classList.toggle('active', !isLive);
+  $('livePanel').classList.toggle('show', isLive);
+  $('simPanel').classList.toggle('show', !isLive);
+  $('historyCard').classList.toggle('hidden', !isLive);
+  $('modeBadge').className = `badge ${isLive ? 'live' : 'sim'}`;
+  $('modeBadge').textContent = isLive ? 'EN VIVO' : 'SIMULACIÓN';
+  agent.prevKey = null;
+  $('log').innerHTML = '';
+  buildPipelineDom();
+  lastModel = null;
+  if (isLive) { sim.stop(); agent.log('Modo en vivo: observando GitHub Actions de ' + esc(live.repo()) + '.', 'info'); live.start(); }
+  else {
+    live.stop(); $('rateWarn').classList.add('hidden');
+    $('commitBar').textContent = 'Elige un escenario para simular el recorrido del pipeline.';
+    $('agent').innerHTML = '<p style="color:var(--muted)">Selecciona un escenario arriba.</p>';
+    $('progress').style.width = '0';
+  }
+}
+
+$('btnLive').onclick = () => setMode('live');
+$('btnSim').onclick = () => setMode('sim');
+document.querySelectorAll('[data-sim]').forEach((b) => { b.onclick = () => sim.run(b.dataset.sim); });
+$('btnFollow').onclick = () => {
+  live.follow = true; live.pinnedSha = null; $('btnFollow').classList.add('active'); live.tick();
+};
+$('history').onclick = (e) => {
+  const tr = e.target.closest('tr[data-sha]');
+  if (!tr) return;
+  live.follow = false; live.pinnedSha = tr.dataset.sha; $('btnFollow').classList.remove('active'); live.tick();
+};
+$('repo').onchange = () => { live.jobsCache.clear(); live.annCache.clear(); agent.prevKey = null; live.tick(); };
+$('branch').onchange = () => live.tick();
+$('token').value = storage('gh-token') || '';
+$('token').onchange = () => { storage('gh-token', $('token').value.trim()); live.tick(); };
+setInterval(() => { // refresca cronómetros de etapas en curso sin pedir datos a GitHub
+  const m = lastModel;
+  if (m && m.source === 'live' && !m.end) render(m, agent.diagnose(m));
+}, 1000);
+
+setMode('live');
+</script>
+</body>
+</html>
