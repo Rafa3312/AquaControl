@@ -31,3 +31,5 @@ void main() {
     });
   });
 }
+
+int demoError = 'texto';
