@@ -88,3 +88,12 @@ jobs:
         uses: SonarSource/sonarqube-scan-action@v8
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Alerta al canal de Discord del equipo si cualquier etapa falla.
+  notify-failure:
+    needs: [build-and-test, sonarqube]
+    if: ${{ failure() }}
+    uses: ./.github/workflows/notify-discord.yml
+    with:
+      results: ${{ toJSON(needs) }}
+    secrets: inherit
