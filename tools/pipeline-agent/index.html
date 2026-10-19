@@ -44,7 +44,7 @@
   .live-panel.show { display: flex; }
 
   /* ---------- pipeline ---------- */
-  .pipeline { display: grid; grid-template-columns: repeat(8, 1fr); gap: 0; align-items: stretch; padding: 8px 0 4px; }
+  .pipeline { display: grid; grid-template-columns: repeat(9, 1fr); gap: 0; align-items: stretch; padding: 8px 0 4px; }
   .stage { position: relative; display: flex; flex-direction: column; align-items: center; text-align: center; padding: 0 6px; }
   .stage .node { position: relative; z-index: 2; width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center;
                  font-size: 26px; background: var(--panel-2); border: 3px solid var(--idle); transition: all .35s; }
@@ -119,7 +119,7 @@
 
   @media (max-width: 1000px) {
     .pipeline { grid-template-columns: repeat(4, 1fr); row-gap: 22px; }
-    .stage:nth-child(4) .conn { display: none; }
+    .stage:nth-child(4n) .conn { display: none; }
     .grid2 { grid-template-columns: 1fr; }
   }
 </style>
@@ -213,7 +213,15 @@ const STAGES = [
   { id: 'sast',  name: 'SAST · Quality Gate', tool: 'SonarQube Cloud',       icon: '🛡️', avg: 120,
     src: [{ wf: WF_CI, job: 'sonarqube', steps: ['Tests con cobertura', 'SonarQube Cloud scan + Quality Gate'] }] },
 ];
+STAGES.push(
+  // Solo corre si algo falla (job notify-failure con if: failure()). Al ser un
+  // workflow reutilizable, GitHub lo nombra "notify-failure / discord".
+  { id: 'notify', name: 'Notificación', tool: 'Discord · webhook', icon: '🔔', avg: 10,
+    src: [{ wf: WF_CI, job: 'notify-failure', prefix: true, optional: true },
+          { wf: WF_RULES, job: 'notify-failure', prefix: true, optional: true }] },
+);
 const CI_STAGES = ['setup', 'deps', 'lint', 'test', 'build', 'sast'];
+const NOTIFY_LABEL = { skipped: 'No requerida', success: 'Alerta enviada', failure: 'Envío fallido', pending: 'En espera', running: 'Enviando' };
 const STAGE = Object.fromEntries(STAGES.map((s) => [s.id, s]));
 
 const STATE_LABEL = {
@@ -258,6 +266,11 @@ const KB = {
     what: 'No se pudo compilar o publicar el APK (artefacto).',
     fix: ['Ejecuta <code>cd app && flutter build apk --debug</code> en tu equipo.',
           'Verifica que el secreto <code>GOOGLE_SERVICES_JSON</code> tenga el contenido completo de <code>google-services.json</code>.'],
+  },
+  notify: {
+    what: 'No se pudo enviar la alerta al canal de Discord.',
+    fix: ['Verifica que el secreto <code>DISCORD_WEBHOOK_URL</code> exista y contenga la URL completa del webhook.',
+          'Revisa que el webhook no se haya eliminado en Discord (Editar canal → Integraciones).'],
   },
   sast: {
     what: 'SonarQube Cloud rechazó el código nuevo: no pasó el Quality Gate.',
@@ -343,7 +356,12 @@ const agent = {
       const before = this.prev[s.id];
       if (!cur || cur.status === before) continue;
       const dur = cur.end && cur.start ? ` en ${fmtDur((cur.end - cur.start) / 1000)}` : '';
-      if (cur.status === 'running') this.log(`▶ Ejecutando <b>${s.name}</b> (${s.tool}).`, 'run');
+      if (s.id === 'notify') {
+        if (cur.status === 'running') this.log('🔔 Enviando alerta al canal de Discord del equipo…', 'run');
+        else if (cur.status === 'success') { this.log('🔔 <b>Alerta enviada a Discord</b>: el equipo ya fue notificado de la falla.', 'info'); }
+        else if (cur.status === 'failure') this.log('⚠ No se pudo enviar la alerta a Discord.', 'fail');
+      }
+      else if (cur.status === 'running') this.log(`▶ Ejecutando <b>${s.name}</b> (${s.tool}).`, 'run');
       else if (cur.status === 'success' && s.id !== 'push') this.log(`✔ <b>${s.name}</b> superada${dur}.`, 'ok');
       else if (cur.status === 'failure' || cur.status === 'cancelled') { this.log(`✖ <b>${s.name}</b> falló${dur}.`, 'fail'); }
       else if (cur.status === 'blocked') this.log(`⏹ <b>${s.name}</b> no se ejecutó: el pipeline se detuvo antes (fail fast).`, 'fail');
@@ -387,6 +405,13 @@ const agent = {
           : (blocked.length
             ? `Fail fast: ${blocked.map((s) => `<b>${s.name}</b>`).join(', ')} no se ejecutaron. Se evitaron ≈ ${fmtDur(saved)} de cómputo y el merge queda bloqueado por el ruleset.`
             : 'El merge queda bloqueado por el ruleset hasta que el check esté en verde.'),
+        notes: [{
+          success: '🔔 Se envió una alerta al canal de Discord del equipo con el job fallido, la rama, el commit y el enlace a la ejecución.',
+          running: '🔔 Enviando la alerta al canal de Discord del equipo…',
+          pending: '🔔 La alerta a Discord se enviará al terminar los jobs.',
+          queued: '🔔 La alerta a Discord se enviará al terminar los jobs.',
+          failure: '⚠ La alerta a Discord no se pudo enviar: revisa el secreto <code>DISCORD_WEBHOOK_URL</code>.',
+        }[st.notify?.status]].filter(Boolean),
         elapsed,
       };
     }
@@ -409,6 +434,7 @@ const agent = {
     if (st.build?.status === 'skipped') notes.push('El APK no se generó porque no existe el secreto <code>GOOGLE_SERVICES_JSON</code>. Agrégalo para que el pipeline entregue el artefacto.');
     if (st.sast?.status === 'skipped') notes.push('El análisis de SonarQube se omitió: falta el secreto <code>SONAR_TOKEN</code>.');
     if (st.rules?.status === 'na') notes.push('Las reglas de commits solo se validan en Pull Requests; este fue un push directo.');
+    if (st.notify?.status === 'skipped') notes.push('🔔 No se envió alerta a Discord porque no hubo fallas.');
     if (m.avgCi && elapsed) {
       const diff = elapsed - m.avgCi;
       notes.push(Math.abs(diff) < 10 ? 'Duración en línea con el promedio.' : `Duración ${diff > 0 ? 'mayor' : 'menor'} que el promedio por ${fmtDur(Math.abs(diff))}.`);
@@ -452,7 +478,7 @@ function render(m, d) {
     const cur = m.stages[s.id] || { status: 'pending' };
     const el = $(`st-${s.id}`);
     el.className = `stage ${cur.status}${s.parallel ? ' parallel' : ''}`;
-    el.querySelector('.state').textContent = STATE_LABEL[cur.status] || cur.status;
+    el.querySelector('.state').textContent = (s.id === 'notify' && NOTIFY_LABEL[cur.status]) || STATE_LABEL[cur.status] || cur.status;
     const t = cur.start ? ((cur.end || Date.now()) - cur.start) / 1000 : null;
     el.querySelector('.time').textContent = cur.status === 'running' ? `⏱ ${fmtDur(t)}` : (cur.end && t != null ? fmtDur(t) : '');
     if (cur.status !== 'na') { total++; if (!['pending', 'queued', 'running'].includes(cur.status)) completed++; }
@@ -502,7 +528,8 @@ function combine(sts) {
 function stageFromJobs(stage, jobsByWf) {
   const sts = [], starts = [], ends = [];
   for (const src of stage.src) {
-    const job = (jobsByWf[src.wf] || []).find((j) => j.name === src.job);
+    if (src.optional && !jobsByWf[src.wf]) continue; // ese workflow no corrió (ej. push directo)
+    const job = (jobsByWf[src.wf] || []).find((j) => j.name === src.job || (src.prefix && j.name.startsWith(src.job)));
     if (!job) { sts.push('pending'); continue; }
     if (!src.steps) {
       sts.push(fromGh(job.status, job.conclusion));
@@ -522,8 +549,10 @@ function stageFromJobs(stage, jobsByWf) {
   return { status, start: starts.length ? Math.min(...starts) : null, end: status === 'running' ? null : (ends.length ? Math.max(...ends) : null) };
 }
 
-function finalize(stages, { ciDone, rulesExists, event }) {
+function finalize(stages, { ciDone, rulesExists, event, allDone }) {
   if (!rulesExists) stages.rules = { status: event === 'push' ? 'na' : 'pending' };
+  // Si todo terminó y el job de notificación nunca corrió, no hubo fallas.
+  if (allDone && ['pending', 'queued'].includes(stages.notify.status)) stages.notify = { status: 'skipped' };
   if (ciDone) for (const id of CI_STAGES) if (['pending', 'queued'].includes(stages[id].status)) stages[id].status = 'skipped';
   const failIdx = CI_STAGES.findIndex((id) => ['failure', 'cancelled'].includes(stages[id].status));
   if (failIdx >= 0) {
@@ -637,7 +666,10 @@ const live = {
     if (g.rules) jobsByWf[WF_RULES] = await this.jobs(g.rules);
     const stages = { push: { status: 'success', start: ms(ref.created_at), end: ms(ref.created_at) } };
     for (const s of STAGES.slice(1)) stages[s.id] = stageFromJobs(s, jobsByWf);
-    finalize(stages, { ciDone: g.ci?.status === 'completed', rulesExists: !!g.rules, event: ref.event });
+    finalize(stages, {
+      ciDone: g.ci?.status === 'completed', rulesExists: !!g.rules, event: ref.event,
+      allDone: [g.ci, g.rules].filter(Boolean).every((r) => r.status === 'completed'),
+    });
 
     const annotations = {};
     for (const s of STAGES) {
@@ -718,7 +750,9 @@ const sim = {
     for (const id of CI_STAGES) { plan[id] = { from: t, to: t + SIM_DUR[id] }; t += SIM_DUR[id]; }
     plan.rules = { from: 0.5, to: 0.5 + SIM_DUR.rules };
     const failAt = sc.fail ? plan[sc.fail].to : Infinity;
-    const end = sc.fail ? failAt : t;
+    // La notificación solo se dispara si algo falla (if: failure()).
+    plan.notify = sc.fail ? { from: failAt + 0.5, to: failAt + 3 } : null;
+    const end = sc.fail ? plan.notify.to : t;
     agent.log(`Simulación iniciada: <b>${kind === 'ok' ? 'sin errores' : 'con error en ' + STAGE[sc.fail].name}</b>.`, 'info');
 
     const tick = () => {
@@ -734,6 +768,11 @@ const sim = {
         else if (now >= 0 && (id === 'setup' || id === 'rules')) status = 'queued';
         stages[id] = { status, start: now >= p.from && status !== 'blocked' ? abs(p.from) : null, end: now >= p.to && status !== 'blocked' ? abs(p.to) : null };
       }
+      const n = plan.notify;
+      if (!n) stages.notify = { status: now >= t ? 'skipped' : 'pending' };
+      else if (now >= n.to) stages.notify = { status: 'success', start: t0 + n.from * 1000, end: t0 + n.to * 1000 };
+      else if (now >= n.from) stages.notify = { status: 'running', start: t0 + n.from * 1000 };
+      else stages.notify = { status: 'pending' };
       const finished = now >= Math.max(end, plan.rules.to);
       const m = {
         source: 'sim', sha, shortSha: sha.slice(0, 7), runKey: kind + t0, branch: 'feature/demo-pipeline', message: sc.msg,

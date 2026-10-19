@@ -37,11 +37,12 @@ Ordenadas de menor a mayor costo, siguiendo el principio *fail fast*:
 | Pruebas unitarias | `flutter test` |
 | Build · Artefacto | `flutter build apk --debug` + subida del APK |
 | SAST · Quality Gate | `ci.yml` → job `sonarqube` (SonarQube Cloud) |
+| Notificación | Job `notify-failure` (`notify-discord.yml`): solo corre si algo falla y envía la alerta a Discord |
 
 ## Cómo "razona" el agente
 
 1. **Percepción:** lee las ejecuciones, jobs, pasos y anotaciones de error de
-   GitHub Actions y los traduce a las 8 etapas del pipeline.
+   GitHub Actions y los traduce a las 9 etapas del pipeline.
 2. **Razonamiento:** detecta la primera etapa fallida, marca como *bloqueadas*
    las posteriores (fail fast) y busca la causa con una base de conocimiento
    por etapa y patrones sobre los mensajes del log (por ejemplo, `Expected:` /
