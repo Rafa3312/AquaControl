@@ -1,0 +1,67 @@
+name: Notificar a Discord
+
+# Workflow reutilizable: lo llaman ci.yml y commitlint.yml cuando algún job
+# falla. Publica una alerta en el canal de Discord del equipo mediante un
+# webhook guardado en el secreto DISCORD_WEBHOOK_URL.
+on:
+  workflow_call:
+    inputs:
+      results:
+        description: 'toJSON(needs) del workflow que llama (resultado de cada job)'
+        type: string
+        required: true
+    secrets:
+      DISCORD_WEBHOOK_URL:
+        required: false
+
+jobs:
+  discord:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enviar alerta de pipeline fallido
+        # Los datos del evento (título del PR, rama) se pasan por variables de
+        # entorno y no interpolados en el script, para evitar inyección.
+        env:
+          WEBHOOK: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RESULTS: ${{ inputs.results }}
+          WORKFLOW: ${{ github.workflow }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ github.head_ref || github.ref_name }}
+          ACTOR: ${{ github.actor }}
+          TITLE: ${{ github.event.pull_request.title || github.event.head_commit.message }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::warning::Falta el secreto DISCORD_WEBHOOK_URL; no se envió la notificación."
+            exit 0
+          fi
+
+          FAILED=$(echo "$RESULTS" | jq -r '[to_entries[] | select(.value.result == "failure" or .value.result == "cancelled") | .key] | join(", ")')
+          PAYLOAD=$(jq -n \
+            --arg workflow "$WORKFLOW" --arg repo "$REPO" --arg branch "$BRANCH" \
+            --arg actor "$ACTOR" --arg title "$TITLE" --arg pr "$PR_URL" \
+            --arg sha "${SHA:0:7}" --arg run "$RUN_URL" --arg failed "${FAILED:-desconocido}" \
+            --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              username: "AquaControl CI",
+              embeds: [{
+                title: ("❌ Pipeline fallido: " + $workflow),
+                url: $run,
+                description: ("**" + ($title | split("\n")[0] | .[0:200]) + "**"),
+                color: 15158332,
+                fields: [
+                  { name: "Job(s) con falla", value: ("`" + $failed + "`"), inline: false },
+                  { name: "Rama", value: $branch, inline: true },
+                  { name: "Commit", value: $sha, inline: true },
+                  { name: "Autor", value: $actor, inline: true },
+                  { name: "Enlaces", value: ("[Ver ejecución](" + $run + ")" + (if $pr != "" then " · [Ver PR](" + $pr + ")" else "" end)), inline: false }
+                ],
+                footer: { text: $repo },
+                timestamp: $ts
+              }]
+            }')
+
+          curl -sS --fail-with-body -H "Content-Type: application/json" -d "$PAYLOAD" "$WEBHOOK"
+          echo "Notificación enviada a Discord (jobs con falla: ${FAILED})."
