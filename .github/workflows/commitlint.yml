@@ -33,3 +33,12 @@ jobs:
             refactor
             test
             ci
+
+  # Alerta al canal de Discord del equipo si las reglas no se cumplen.
+  notify-failure:
+    needs: [commitlint, pr-title]
+    if: ${{ failure() }}
+    uses: ./.github/workflows/notify-discord.yml
+    with:
+      results: ${{ toJSON(needs) }}
+    secrets: inherit
