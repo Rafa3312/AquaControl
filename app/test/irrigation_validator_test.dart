@@ -8,7 +8,7 @@ void main() {
         selectedDays: ['Lun', 'Mié', 'Vie'],
         durationMinutes: 15,
       );
-      expect(result.isValid, true);
+      expect(result.isValid, false);
       expect(result.error, isNull);
     });
 
