@@ -16,10 +16,11 @@ git pull
 git checkout -b feature/sprint-05-zonas-notificaciones
 ```
 
-```powershell
-# 3. Traer los avances del proyecto principal (solo lee H2Control, no lo modifica)
-powershell -ExecutionPolicy Bypass -File scripts\sync-from-h2control.ps1
-```
+3. Hacer los cambios del sprint directamente en este repo. Desde el Sprint 5 el
+   equipo trabaja aquí (cada quien en su rama, ver
+   [`docs/guia-colaboradores.md`](../guia-colaboradores.md)); **ya no se usa**
+   `scripts/sync-from-h2control.ps1`, porque traería la versión anterior de
+   `H2Control` y borraría lo nuevo.
 
 ```bash
 # 4. Documentar el sprint: copiar la plantilla y llenarla
@@ -44,12 +45,12 @@ documento de cada sprint cuando lo cierres.
 
 | Sprint | Objetivo | Historias | Estado | Doc |
 |---|---|---|---|---|
-| 1 | Bases técnicas y vinculación app–programador | #1 pairing, wireframes, arquitectura | Pendiente | — |
-| 2 | Control manual del riego | #2 encendido/apagado, #6 estado del sistema | Pendiente | — |
-| 3 | Programación automática de riegos | #3 crear, #4 editar/eliminar programas, horarios en firmware | Pendiente | — |
-| 4 | Autenticación de usuario | #5 registro/login, #9 recuperar contraseña | Pendiente | — |
-| 5 | Múltiples zonas y notificaciones | #7 zonas, #8 notificaciones | Pendiente | — |
-| 6 | Riego por humedad del suelo | #10 sensor de humedad | Pendiente | — |
+| 1 | Bases técnicas y vinculación app–programador | #1 pairing, wireframes, arquitectura | Terminado | línea base |
+| 2 | Control manual del riego | #2 encendido/apagado, #6 estado del sistema | Terminado | línea base |
+| 3 | Programación automática de riegos | #3 crear, #4 editar/eliminar programas, horarios en firmware | Terminado | línea base |
+| 4 | Autenticación de usuario | #5 registro/login, #9 recuperar contraseña | Terminado | línea base |
+| 5 | Múltiples zonas y notificaciones | #7 zonas, #8 notificaciones | Terminado | [sprint-05](sprint-05.md) |
+| 6 | Riego por humedad del suelo | #10 sensor de humedad | En curso | — |
 | 7 | Riego por condiciones climáticas | #11 sensor de lluvia | Pendiente | — |
 | 8 | Historial y estadísticas | #14 historial, #16 consumo de agua | Pendiente | — |
 | 9 | Confiabilidad ante fallas | #12 alertas de fallas, #13 modo offline | Pendiente | — |

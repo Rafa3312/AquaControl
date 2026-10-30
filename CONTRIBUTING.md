@@ -1,5 +1,8 @@
 # Guía de Contribución — AquaControl
 
+¿Primera vez? Empieza por [`docs/guia-colaboradores.md`](docs/guia-colaboradores.md):
+instalación, configuración de Git con tu cuenta y el paso a paso de tu primer PR.
+
 ## Flujo de trabajo
 
 Seguimos **Gitflow ligero** (elegido y justificado en `docs/Documento_CI_CD_AquaControl.docx` frente a GitHub Flow y Trunk-Based, y ya reflejado en las reglas de protección del repositorio):
@@ -21,7 +24,9 @@ Usamos **Conventional Commits** (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`
 ## Pull Requests
 
 - Requiere que los checks de CI (`build-and-test`, `commitlint`, y `pr-title` en `main`) estén en verde.
-- Requiere al menos 1 aprobación en `main` (en fase solo-dev, autorrevisión con el checklist de la plantilla de PR).
+- Requiere al menos 1 aprobación en `main` de un integrante distinto al autor del PR.
+- PR hacia `develop`: se integra con **Create a merge commit** para que cada commit conserve a su autor.
+- PR hacia `main`: *Squash* o *Rebase* (historial lineal), y después back-merge de `main` a `develop` con merge commit.
 - Usa la plantilla en `.github/pull_request_template.md`.
 
 ## Pruebas
