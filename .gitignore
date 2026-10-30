@@ -45,3 +45,10 @@ firmware/**/build/
 firmware/**/.pio/
 *.bin
 !firmware/releases/*.bin
+
+# --- Firebase (firebase/) ---
+node_modules/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log
+.firebase/
