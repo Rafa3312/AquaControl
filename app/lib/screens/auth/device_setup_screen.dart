@@ -5,6 +5,7 @@ import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/device_provider.dart';
 import '../main_screen.dart';
+import 'login_screen.dart';
 import 'wifi_setup_screen.dart';
 
 class DeviceSetupScreen extends StatefulWidget {
@@ -18,12 +19,12 @@ class DeviceSetupScreen extends StatefulWidget {
 class _DeviceSetupScreenState extends State<DeviceSetupScreen>
     with TickerProviderStateMixin {
   late AnimationController _pulseCtrl;
-  late Animation<double>   _pulseAnim;
+  late Animation<double> _pulseAnim;
 
-  _ScanState _state    = _ScanState.scanning;
-  String?    _foundIp;
-  String     _progress = 'Buscando dispositivo...';
-  String?    _error;
+  _ScanState _state = _ScanState.scanning;
+  String? _foundIp;
+  String _progress = 'Buscando dispositivo...';
+  String? _error;
 
   // true = token local no coincide con ESP → necesita reset físico
   bool _needsHardReset = false;
@@ -44,11 +45,11 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
   // ─── Descubrimiento ───────────────────────────────────────────────────────
   Future<void> _startScan() async {
     setState(() {
-      _state         = _ScanState.scanning;
-      _foundIp       = null;
-      _error         = null;
+      _state = _ScanState.scanning;
+      _foundIp = null;
+      _error = null;
       _needsHardReset = false;
-      _progress      = 'Buscando dispositivo en la red...';
+      _progress = 'Buscando dispositivo en la red...';
     });
 
     final device = context.read<DeviceProvider>();
@@ -64,7 +65,8 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
       if (result == true) {
         // Esperar a que el ESP reinicie y se conecte al WiFi de casa
         // Polling cada 3s hasta que responda (máx 60s)
-        setState(() => _progress = 'Esperando que el dispositivo se reconecte...');
+        setState(
+            () => _progress = 'Esperando que el dispositivo se reconecte...');
         final device = context.read<DeviceProvider>();
         bool found = false;
         for (int i = 0; i < 20 && !found; i++) {
@@ -77,20 +79,28 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
         }
         if (mounted) _startScan();
       } else {
-        setState(() { _state = _ScanState.error; _error = 'Configuración cancelada'; });
+        setState(() {
+          _state = _ScanState.error;
+          _error = 'Configuración cancelada';
+        });
       }
       return;
     }
 
     // Buscar en la red normal
     final ip = await device.discover(
-      onProgress: (msg) { if (mounted) setState(() => _progress = msg); },
+      onProgress: (msg) {
+        if (mounted) setState(() => _progress = msg);
+      },
     );
 
     if (!mounted) return;
 
     if (ip != null) {
-      setState(() { _state = _ScanState.found; _foundIp = ip; });
+      setState(() {
+        _state = _ScanState.found;
+        _foundIp = ip;
+      });
     } else {
       setState(() {
         _state = _ScanState.error;
@@ -101,118 +111,38 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
 
   // ─── Reset con PIN ───────────────────────────────────────────────────────
   Future<void> _showResetWithPin() async {
-    final pinCtrl = TextEditingController();
-    String? dialogError;
-
-    await showDialog(
+    final pin = await showDialog<String>(
       context: context,
       barrierDismissible: false,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setS) => AlertDialog(
-          backgroundColor: AppTheme.bgCard,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Row(
-            children: [
-              Icon(Icons.lock_reset_rounded, color: AppTheme.warning, size: 22),
-              SizedBox(width: 10),
-              Text('Resetear dispositivo',
-                  style: TextStyle(color: AppTheme.textPrimary,
-                      fontWeight: FontWeight.w700, fontSize: 17)),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'El PIN de 6 dígitos aparece en el Monitor Serial del Arduino IDE al arrancar el ESP32:',
-                style: TextStyle(color: AppTheme.textSecondary,
-                    fontSize: 13, height: 1.5),
-              ),
-              const SizedBox(height: 8),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: AppTheme.bgSecondary,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: AppTheme.divider),
-                ),
-                child: const Text(
-                  '[Sec] 07:00:00  event=reset_pin_XXXXXX',
-                  style: TextStyle(
-                      color: AppTheme.accent,
-                      fontSize: 11,
-                      fontFamily: 'monospace'),
-                ),
-              ),
-              const SizedBox(height: 16),
-              TextField(
-                controller: pinCtrl,
-                keyboardType: TextInputType.number,
-                maxLength: 6,
-                style: const TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: 8),
-                textAlign: TextAlign.center,
-                decoration: const InputDecoration(
-                  hintText: '000000',
-                  counterText: '',
-                ),
-              ),
-              if (dialogError != null) ...[
-                const SizedBox(height: 10),
-                Text(dialogError!,
-                    style: const TextStyle(color: AppTheme.danger, fontSize: 12)),
-              ],
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(ctx),
-              child: const Text('Cancelar',
-                  style: TextStyle(color: AppTheme.textSecondary)),
-            ),
-            ElevatedButton(
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppTheme.warning,
-                shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(10)),
-              ),
-              onPressed: () async {
-                if (pinCtrl.text.length != 6) {
-                  setS(() => dialogError = 'Ingresa los 6 dígitos');
-                  return;
-                }
-                // Cerrar diálogo y ejecutar reset
-                Navigator.pop(ctx);
-                await _doResetWithPin(pinCtrl.text);
-              },
-              child: const Text('Resetear'),
-            ),
-          ],
-        ),
-      ),
+      builder: (_) => const _ResetPinDialog(),
     );
-    pinCtrl.dispose();
+    if (pin != null && mounted) await _doResetWithPin(pin);
   }
 
   Future<void> _doResetWithPin(String pin) async {
     if (_foundIp == null) {
       // Si no tenemos IP, intentar encontrar el dispositivo primero
-      setState(() { _state = _ScanState.scanning; _progress = 'Buscando para resetear...'; });
+      setState(() {
+        _state = _ScanState.scanning;
+        _progress = 'Buscando para resetear...';
+      });
       final device = context.read<DeviceProvider>();
       final ip = await device.discover();
       if (!mounted) return;
       if (ip == null) {
-        setState(() { _state = _ScanState.error; _error = 'No se encontró el dispositivo'; });
+        setState(() {
+          _state = _ScanState.error;
+          _error = 'No se encontró el dispositivo';
+        });
         return;
       }
       _foundIp = ip;
     }
 
-    setState(() { _state = _ScanState.connecting; _progress = 'Enviando reset...'; });
+    setState(() {
+      _state = _ScanState.connecting;
+      _progress = 'Enviando reset...';
+    });
 
     final device = context.read<DeviceProvider>();
     final err = await device.factoryResetWithPin(_foundIp!, pin);
@@ -236,7 +166,10 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
   // ─── Pairing (con recuperación automática) ────────────────────────────────
   Future<void> _pair() async {
     if (_foundIp == null) return;
-    setState(() { _state = _ScanState.connecting; _error = null; });
+    setState(() {
+      _state = _ScanState.connecting;
+      _error = null;
+    });
 
     final device = context.read<DeviceProvider>();
     final err = await device.pairDevice(_foundIp!);
@@ -265,10 +198,10 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
       if (recoverErr == 'NO_TOKEN') {
         // No hay token local o no coincide → necesita reset físico del ESP
         setState(() {
-          _state          = _ScanState.error;
+          _state = _ScanState.error;
           _needsHardReset = true;
           _error = 'El dispositivo ya está vinculado con un token diferente.\n'
-                   'Necesitas hacer un reset de fábrica del ESP32.';
+              'Necesitas hacer un reset de fábrica del ESP32.';
         });
         return;
       }
@@ -281,7 +214,10 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
     }
 
     // ── Caso 3: error real ────────────────────────────────────────────────
-    setState(() { _state = _ScanState.error; _error = err; });
+    setState(() {
+      _state = _ScanState.error;
+      _error = err;
+    });
   }
 
   Future<void> _finishPairing() async {
@@ -307,65 +243,133 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
     super.dispose();
   }
 
+  // ─── Volver ──────────────────────────────────────────────────────────────
+  /// Abandona la búsqueda y regresa a donde estaba el usuario:
+  /// - Dentro de la app (Reconectar dispositivo): a la pantalla anterior.
+  /// - Al iniciar sesión o registrarse: al inicio de sesión.
+  Future<void> _goBack() async {
+    if (!widget.isOnboarding) {
+      Navigator.pop(context);
+      return;
+    }
+    final leave = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Text('¿Dejar la búsqueda?',
+            style: TextStyle(
+                color: AppTheme.textPrimary, fontWeight: FontWeight.w700)),
+        content: const Text(
+          'Volverás al inicio de sesión. Puedes vincular tu programador más tarde '
+          'entrando de nuevo con tu cuenta.',
+          style: TextStyle(color: AppTheme.textSecondary, height: 1.5),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: const Text('Seguir buscando',
+                style: TextStyle(color: AppTheme.textSecondary)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Volver'),
+          ),
+        ],
+      ),
+    );
+    if (leave != true || !mounted) return;
+    await context.read<AuthProvider>().logout();
+    if (!mounted) return;
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const LoginScreen()),
+      (_) => false,
+    );
+  }
+
   // ─── UI ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.bgPrimary,
-      appBar: widget.isOnboarding
-          ? null
-          : AppBar(
-              backgroundColor: AppTheme.bgPrimary,
-              leading: IconButton(
-                icon: const Icon(Icons.arrow_back_ios_new_rounded),
-                onPressed: () => Navigator.pop(context),
+    // El botón atrás de Android hace lo mismo que "Volver"
+    return PopScope(
+      canPop: !widget.isOnboarding,
+      onPopInvokedWithResult: (didPop, _) {
+        if (!didPop) _goBack();
+      },
+      child: Scaffold(
+        backgroundColor: AppTheme.bgPrimary,
+        appBar: widget.isOnboarding
+            ? null
+            : AppBar(
+                backgroundColor: AppTheme.bgPrimary,
+                leading: IconButton(
+                  tooltip: 'Volver',
+                  icon: const Icon(Icons.arrow_back_ios_new_rounded),
+                  onPressed: _goBack,
+                ),
+                title: const Text('Conectar dispositivo'),
               ),
-              title: const Text('Conectar dispositivo'),
-            ),
-      body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
-          child: ConstrainedBox(
-            // Mínimo la altura disponible para que los Spacers funcionen
-            // cuando el contenido es corto, y scroll cuando es largo
-            constraints: BoxConstraints(
-              minHeight: MediaQuery.of(context).size.height -
-                  MediaQuery.of(context).padding.top -
-                  MediaQuery.of(context).padding.bottom -
-                  (widget.isOnboarding ? 0 : kToolbarHeight) -
-                  64, // padding vertical
-            ),
-            child: IntrinsicHeight(
-              child: Column(
-                children: [
-                  if (widget.isOnboarding) ...[
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text('Conectar dispositivo',
-                          style: TextStyle(
-                              color: AppTheme.textPrimary,
-                              fontSize: 28,
-                              fontWeight: FontWeight.w800)),
-                    ),
-                    const SizedBox(height: 8),
-                    const Align(
-                      alignment: Alignment.centerLeft,
-                      child: Text(
-                        'Asegúrate de estar en la misma red WiFi que tu ESP32.',
-                        style: TextStyle(
-                            color: AppTheme.textSecondary, fontSize: 14, height: 1.5),
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 32),
+            child: ConstrainedBox(
+              // Mínimo la altura disponible para que los Spacers funcionen
+              // cuando el contenido es corto, y scroll cuando es largo
+              constraints: BoxConstraints(
+                minHeight: MediaQuery.of(context).size.height -
+                    MediaQuery.of(context).padding.top -
+                    MediaQuery.of(context).padding.bottom -
+                    (widget.isOnboarding ? 0 : kToolbarHeight) -
+                    64, // padding vertical
+              ),
+              child: IntrinsicHeight(
+                child: Column(
+                  children: [
+                    if (widget.isOnboarding) ...[
+                      Align(
+                        alignment: Alignment.centerLeft,
+                        child: TextButton.icon(
+                          onPressed: _goBack,
+                          icon: const Icon(Icons.arrow_back_ios_new_rounded,
+                              size: 16),
+                          label: const Text('Volver'),
+                          style: TextButton.styleFrom(
+                            foregroundColor: AppTheme.textSecondary,
+                            padding: EdgeInsets.zero,
+                          ),
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 8),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text('Conectar dispositivo',
+                            style: TextStyle(
+                                color: AppTheme.textPrimary,
+                                fontSize: 28,
+                                fontWeight: FontWeight.w800)),
+                      ),
+                      const SizedBox(height: 8),
+                      const Align(
+                        alignment: Alignment.centerLeft,
+                        child: Text(
+                          'Asegúrate de estar en la misma red WiFi que tu ESP32.',
+                          style: TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 14,
+                              height: 1.5),
+                        ),
+                      ),
+                      const SizedBox(height: 32),
+                    ],
+                    const Spacer(),
+                    _buildRadar(),
                     const SizedBox(height: 32),
+                    _buildStatusInfo(),
+                    const Spacer(),
+                    const SizedBox(height: 24),
+                    _buildButtons(),
                   ],
-                  const Spacer(),
-                  _buildRadar(),
-                  const SizedBox(height: 32),
-                  _buildStatusInfo(),
-                  const Spacer(),
-                  const SizedBox(height: 24),
-                  _buildButtons(),
-                ],
+                ),
               ),
             ),
           ),
@@ -377,8 +381,8 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
   Widget _buildRadar() {
     final color = switch (_state) {
       _ScanState.found || _ScanState.connected => AppTheme.success,
-      _ScanState.error                         => AppTheme.danger,
-      _                                        => AppTheme.primary,
+      _ScanState.error => AppTheme.danger,
+      _ => AppTheme.primary,
     };
 
     return AnimatedBuilder(
@@ -388,15 +392,17 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
         children: [
           for (final r in [80.0, 105.0, 130.0])
             Container(
-              width:  r * (_state == _ScanState.scanning ? _pulseAnim.value : 1),
-              height: r * (_state == _ScanState.scanning ? _pulseAnim.value : 1),
+              width: r * (_state == _ScanState.scanning ? _pulseAnim.value : 1),
+              height:
+                  r * (_state == _ScanState.scanning ? _pulseAnim.value : 1),
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 border: Border.all(color: color.withOpacity(0.18), width: 1.5),
               ),
             ),
           Container(
-            width: 60, height: 60,
+            width: 60,
+            height: 60,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: color.withOpacity(0.14),
@@ -410,133 +416,137 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
   }
 
   IconData _stateIcon() => switch (_state) {
-    _ScanState.connected => Icons.check_rounded,
-    _ScanState.error     => _needsHardReset
-        ? Icons.lock_reset_rounded
-        : Icons.wifi_off_rounded,
-    _ => Icons.router_rounded,
-  };
+        _ScanState.connected => Icons.check_rounded,
+        _ScanState.error =>
+          _needsHardReset ? Icons.lock_reset_rounded : Icons.wifi_off_rounded,
+        _ => Icons.router_rounded,
+      };
 
   Widget _buildStatusInfo() {
     return switch (_state) {
       _ScanState.scanning => Column(
-        children: [
-          Text(_progress,
+          children: [
+            Text(_progress,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 10),
+            const Text('mDNS → IP guardada → escaneo de red',
+                style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
+          ],
+        ),
+      _ScanState.found => Column(
+          children: [
+            const Text('¡Dispositivo encontrado!',
+                style: TextStyle(
+                    color: AppTheme.success,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              decoration: BoxDecoration(
+                color: AppTheme.bgCard,
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: AppTheme.success.withOpacity(0.4)),
+              ),
+              child: Column(
+                children: [
+                  const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.memory_rounded,
+                          color: AppTheme.success, size: 20),
+                      SizedBox(width: 10),
+                      Text('aquacontrol.local',
+                          style: TextStyle(
+                              color: AppTheme.textPrimary,
+                              fontWeight: FontWeight.w600,
+                              fontFamily: 'monospace')),
+                    ],
+                  ),
+                  const SizedBox(height: 6),
+                  Text('IP: $_foundIp',
+                      style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 12,
+                          fontFamily: 'monospace')),
+                ],
+              ),
+            ),
+          ],
+        ),
+      _ScanState.connecting => Column(
+          children: [
+            Text(
+                _progress.contains('Recuperando')
+                    ? 'Recuperando vinculación...'
+                    : 'Vinculando...',
+                style: const TextStyle(
+                    color: AppTheme.primary,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w600)),
+            const SizedBox(height: 6),
+            Text(
+              _progress.contains('Recuperando')
+                  ? 'Verificando token existente'
+                  : 'Generando token de seguridad',
+              style:
+                  const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+            ),
+            const SizedBox(height: 20),
+            const LinearProgressIndicator(
+                backgroundColor: AppTheme.bgCard, color: AppTheme.primary),
+          ],
+        ),
+      _ScanState.connected => const Column(
+          children: [
+            Icon(Icons.verified_rounded, color: AppTheme.success, size: 52),
+            SizedBox(height: 12),
+            Text('¡Vinculado correctamente!',
+                style: TextStyle(
+                    color: AppTheme.success,
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700)),
+            SizedBox(height: 6),
+            Text('Token de seguridad guardado',
+                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
+          ],
+        ),
+      _ScanState.error => Column(
+          children: [
+            Icon(
+              _needsHardReset
+                  ? Icons.lock_reset_rounded
+                  : Icons.wifi_off_rounded,
+              color: AppTheme.danger,
+              size: 44,
+            ),
+            const SizedBox(height: 12),
+            Text(
+              _needsHardReset
+                  ? 'Reset de fábrica necesario'
+                  : 'No se pudo conectar',
+              style: const TextStyle(
+                  color: AppTheme.danger,
+                  fontSize: 16,
+                  fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _error ?? 'Error desconocido',
               textAlign: TextAlign.center,
               style: const TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w600)),
-          const SizedBox(height: 10),
-          const Text('mDNS → IP guardada → escaneo de red',
-              style: TextStyle(color: AppTheme.textMuted, fontSize: 12)),
-        ],
-      ),
-
-      _ScanState.found => Column(
-        children: [
-          const Text('¡Dispositivo encontrado!',
-              style: TextStyle(
-                  color: AppTheme.success,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700)),
-          const SizedBox(height: 12),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-            decoration: BoxDecoration(
-              color: AppTheme.bgCard,
-              borderRadius: BorderRadius.circular(14),
-              border: Border.all(color: AppTheme.success.withOpacity(0.4)),
+                  color: AppTheme.textSecondary, fontSize: 13, height: 1.5),
             ),
-            child: Column(
-              children: [
-                const Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(Icons.memory_rounded, color: AppTheme.success, size: 20),
-                    SizedBox(width: 10),
-                    Text('aquacontrol.local',
-                        style: TextStyle(
-                            color: AppTheme.textPrimary,
-                            fontWeight: FontWeight.w600,
-                            fontFamily: 'monospace')),
-                  ],
-                ),
-                const SizedBox(height: 6),
-                Text('IP: $_foundIp',
-                    style: const TextStyle(
-                        color: AppTheme.textSecondary,
-                        fontSize: 12,
-                        fontFamily: 'monospace')),
-              ],
-            ),
-          ),
-        ],
-      ),
-
-      _ScanState.connecting => Column(
-        children: [
-          Text(_progress.contains('Recuperando') ? 'Recuperando vinculación...' : 'Vinculando...',
-              style: const TextStyle(
-                  color: AppTheme.primary,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w600)),
-          const SizedBox(height: 6),
-          Text(
-            _progress.contains('Recuperando')
-                ? 'Verificando token existente'
-                : 'Generando token de seguridad',
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-          ),
-          const SizedBox(height: 20),
-          const LinearProgressIndicator(
-              backgroundColor: AppTheme.bgCard, color: AppTheme.primary),
-        ],
-      ),
-
-      _ScanState.connected => const Column(
-        children: [
-          Icon(Icons.verified_rounded, color: AppTheme.success, size: 52),
-          SizedBox(height: 12),
-          Text('¡Vinculado correctamente!',
-              style: TextStyle(
-                  color: AppTheme.success,
-                  fontSize: 18,
-                  fontWeight: FontWeight.w700)),
-          SizedBox(height: 6),
-          Text('Token de seguridad guardado',
-              style: TextStyle(color: AppTheme.textSecondary, fontSize: 13)),
-        ],
-      ),
-
-      _ScanState.error => Column(
-        children: [
-          Icon(
-            _needsHardReset ? Icons.lock_reset_rounded : Icons.wifi_off_rounded,
-            color: AppTheme.danger,
-            size: 44,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            _needsHardReset ? 'Reset de fábrica necesario' : 'No se pudo conectar',
-            style: const TextStyle(
-                color: AppTheme.danger,
-                fontSize: 16,
-                fontWeight: FontWeight.w700),
-          ),
-          const SizedBox(height: 10),
-          Text(
-            _error ?? 'Error desconocido',
-            textAlign: TextAlign.center,
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 13, height: 1.5),
-          ),
-          if (_needsHardReset) ...[
-            const SizedBox(height: 16),
-            _HardResetInstructions(),
+            if (_needsHardReset) ...[
+              const SizedBox(height: 16),
+              _HardResetInstructions(),
+            ],
           ],
-        ],
-      ),
+        ),
     };
   }
 
@@ -596,8 +606,9 @@ class _DeviceSetupScreenState extends State<DeviceSetupScreen>
         if (!widget.isOnboarding) ...[
           const SizedBox(height: 8),
           TextButton(
-            onPressed: () => Navigator.pop(context),
-            style: TextButton.styleFrom(foregroundColor: AppTheme.textSecondary),
+            onPressed: _goBack,
+            style:
+                TextButton.styleFrom(foregroundColor: AppTheme.textSecondary),
             child: const Text('Cancelar'),
           ),
         ],
@@ -633,14 +644,17 @@ class _HardResetInstructions extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           _step('1', 'Abre el Monitor Serial del Arduino IDE (115200 baud)'),
-          _step('2', 'Busca el PIN de reset: aparece en el log como "Reset PIN: XXXXXX"'),
+          _step('2',
+              'Busca el PIN de reset: aparece en el log como "Reset PIN: XXXXXX"'),
           _step('3', 'Envía el comando: POST /reset con ese PIN'),
-          _step('4', 'O presiona el botón EN (Enable) del ESP32 durante 10 segundos'),
+          _step('4',
+              'O presiona el botón EN (Enable) del ESP32 durante 10 segundos'),
           const SizedBox(height: 8),
           const Text(
             'Alternativa rápida: sube el firmware de nuevo desde Arduino IDE — '
             'eso borra la flash y el ESP queda sin token.',
-            style: TextStyle(color: AppTheme.textMuted, fontSize: 11, height: 1.5),
+            style:
+                TextStyle(color: AppTheme.textMuted, fontSize: 11, height: 1.5),
           ),
         ],
       ),
@@ -653,7 +667,8 @@ class _HardResetInstructions extends StatelessWidget {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Container(
-              width: 18, height: 18,
+              width: 18,
+              height: 18,
               decoration: BoxDecoration(
                 shape: BoxShape.circle,
                 color: AppTheme.warning.withOpacity(0.2),
@@ -679,3 +694,113 @@ class _HardResetInstructions extends StatelessWidget {
 }
 
 enum _ScanState { scanning, found, connecting, connected, error }
+
+/// Diálogo del PIN de reset. Es dueño de su TextEditingController para
+/// liberarlo hasta que el diálogo sale de pantalla (tras su animación).
+class _ResetPinDialog extends StatefulWidget {
+  const _ResetPinDialog();
+
+  @override
+  State<_ResetPinDialog> createState() => _ResetPinDialogState();
+}
+
+class _ResetPinDialogState extends State<_ResetPinDialog> {
+  final _pinCtrl = TextEditingController();
+  String? _dialogError;
+
+  @override
+  void dispose() {
+    _pinCtrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      backgroundColor: AppTheme.bgCard,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      title: const Row(
+        children: [
+          Icon(Icons.lock_reset_rounded, color: AppTheme.warning, size: 22),
+          SizedBox(width: 10),
+          Text('Resetear dispositivo',
+              style: TextStyle(
+                  color: AppTheme.textPrimary,
+                  fontWeight: FontWeight.w700,
+                  fontSize: 17)),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'El PIN de 6 dígitos aparece en el Monitor Serial del Arduino IDE al arrancar el ESP32:',
+            style: TextStyle(
+                color: AppTheme.textSecondary, fontSize: 13, height: 1.5),
+          ),
+          const SizedBox(height: 8),
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: AppTheme.bgSecondary,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: AppTheme.divider),
+            ),
+            child: const Text(
+              '[Sec] 07:00:00  event=reset_pin_XXXXXX',
+              style: TextStyle(
+                  color: AppTheme.accent,
+                  fontSize: 11,
+                  fontFamily: 'monospace'),
+            ),
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: _pinCtrl,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            style: const TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 22,
+                fontWeight: FontWeight.w700,
+                letterSpacing: 8),
+            textAlign: TextAlign.center,
+            decoration: const InputDecoration(
+              hintText: '000000',
+              counterText: '',
+            ),
+          ),
+          if (_dialogError != null) ...[
+            const SizedBox(height: 10),
+            Text(_dialogError!,
+                style: const TextStyle(color: AppTheme.danger, fontSize: 12)),
+          ],
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancelar',
+              style: TextStyle(color: AppTheme.textSecondary)),
+        ),
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: AppTheme.warning,
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          ),
+          onPressed: () {
+            if (_pinCtrl.text.length != 6) {
+              setState(() => _dialogError = 'Ingresa los 6 dígitos');
+              return;
+            }
+            // Cerrar devolviendo el PIN; el reset lo hace la pantalla
+            Navigator.pop(context, _pinCtrl.text);
+          },
+          child: const Text('Resetear'),
+        ),
+      ],
+    );
+  }
+}

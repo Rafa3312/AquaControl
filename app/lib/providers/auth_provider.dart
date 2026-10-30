@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:local_auth/local_auth.dart';
@@ -68,6 +69,21 @@ class AuthProvider extends ChangeNotifier {
     _userName         = prefs.getString('userName_$uid');
     _deviceId         = prefs.getString('deviceId_$uid');
     _biometricEnabled = prefs.getBool('biometricEnabled_$uid') ?? false;
+
+    // Sin dato local (app reinstalada o teléfono nuevo): la vinculación vive
+    // en la cuenta (devices/{uid}), así que se recupera de Firestore en lugar
+    // de mandar al usuario a vincular desde cero.
+    if (uid != null && (_deviceId == null || _deviceId!.isEmpty)) {
+      try {
+        final doc = await FirebaseFirestore.instance.doc('devices/$uid').get();
+        if (doc.exists && doc.data()?['token'] != null) {
+          _deviceId = (doc.data()?['hostname'] as String?) ?? 'aquacontrol.local';
+          await prefs.setString('deviceId_$uid', _deviceId!);
+        }
+      } catch (e) {
+        debugPrint('[Auth] No se pudo consultar la vinculación: $e');
+      }
+    }
   }
 
   Future<void> _clearLocalSession() async {

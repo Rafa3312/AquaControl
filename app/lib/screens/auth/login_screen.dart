@@ -317,7 +317,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     onPressed: _loading ? null : _biometricLogin,
                     icon: const Icon(Icons.fingerprint,
                         color: AppTheme.primary, size: 24),
-                    label: const Text('Entrar con huella digital',
+                    label: const Text('Entrar con biometría',
                         style: TextStyle(color: AppTheme.primary)),
                     style: OutlinedButton.styleFrom(
                       side: const BorderSide(
@@ -336,7 +336,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 const SizedBox(height: 16),
                 Center(
                   child: Text(
-                    'Activa la huella desde Registrarte → opciones',
+                    'Activa la biometría desde Registrarte → opciones',
                     style: TextStyle(
                         color: AppTheme.textMuted.withOpacity(0.7),
                         fontSize: 12),
