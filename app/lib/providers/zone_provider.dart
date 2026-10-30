@@ -10,26 +10,31 @@ import '../models/zone.dart';
 /// Se guardan en Firestore (users/{uid}/zones/{id}) y en caché local para
 /// mostrarlos aunque no haya internet.
 class ZoneProvider extends ChangeNotifier {
-  final _firestore = FirebaseFirestore.instance;
+  final FirebaseFirestore _firestore;
   final Map<int, String> _names = {};
-  StreamSubscription<User?>? _authSub;
+  StreamSubscription<String?>? _authSub;
   String? _uid;
 
-  ZoneProvider() {
-    _authSub = FirebaseAuth.instance.authStateChanges().listen(_onUser);
+  /// [firestore] y [uidChanges] se inyectan en las pruebas; en la app se usan
+  /// Firestore y la sesión de Firebase Auth.
+  ZoneProvider({FirebaseFirestore? firestore, Stream<String?>? uidChanges})
+      : _firestore = firestore ?? FirebaseFirestore.instance {
+    _authSub = (uidChanges ??
+            FirebaseAuth.instance.authStateChanges().map((u) => u?.uid))
+        .listen(_onUser);
   }
 
   String nameOf(int id) => _names[id] ?? Zones.defaultName(id);
 
-  Future<void> _onUser(User? user) async {
-    _uid = user?.uid;
+  Future<void> _onUser(String? uid) async {
+    _uid = uid;
     _names.clear();
     notifyListeners();
-    if (user == null) return;
+    if (uid == null) return;
 
     // 1. Caché local (inmediato)
     final prefs = await SharedPreferences.getInstance();
-    final cached = prefs.getString(_cacheKey(user.uid));
+    final cached = prefs.getString(_cacheKey(uid));
     if (cached != null) {
       final map = jsonDecode(cached) as Map<String, dynamic>;
       map.forEach((k, v) => _names[int.parse(k)] = v as String);
@@ -38,7 +43,7 @@ class ZoneProvider extends ChangeNotifier {
 
     // 2. Firestore (fuente de verdad)
     try {
-      final snap = await _firestore.collection('users/${user.uid}/zones').get();
+      final snap = await _firestore.collection('users/$uid/zones').get();
       for (final doc in snap.docs) {
         final id = int.tryParse(doc.id);
         final name = doc.data()['name'];

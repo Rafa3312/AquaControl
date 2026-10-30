@@ -9,6 +9,10 @@ import 'schedule_provider.dart';
 /// como regando; cuando se cumple la duración, la apaga. El ESP32 ejecuta
 /// los horarios por su cuenta; esto mantiene la UI al día.
 class SchedulerService {
+  /// [clock] se inyecta en las pruebas para simular la hora.
+  SchedulerService({DateTime Function()? clock}) : _now = clock ?? DateTime.now;
+
+  final DateTime Function() _now;
   Timer? _timer;
   IrrigationProvider? _irrigation;
   ScheduleProvider? _schedules;
@@ -31,12 +35,16 @@ class SchedulerService {
     _timer = null;
   }
 
+  /// Ejecuta una revisión sin esperar al timer (para las pruebas).
+  @visibleForTesting
+  void tick() => _check();
+
   void _check() {
     final irrigation = _irrigation;
     final schedules  = _schedules;
     if (irrigation == null || schedules == null) return;
 
-    final now = DateTime.now();
+    final now = _now();
     for (final zoneId in Zones.ids) {
       _checkZone(zoneId, now, irrigation, schedules);
     }

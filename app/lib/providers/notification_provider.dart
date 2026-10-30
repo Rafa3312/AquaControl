@@ -2,9 +2,9 @@ import 'dart:async';
 import 'dart:io' show Platform;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import '../models/irrigation_notification.dart';
+import '../services/push_messaging.dart';
 
 /// Avisos de inicio, fin y falla del riego (HU-8).
 ///
@@ -14,14 +14,16 @@ import '../models/irrigation_notification.dart';
 ///   consentimiento (lo exigen también las reglas de Firestore).
 /// - Lista: lee users/{uid}/notifications, que escribe la Cloud Function.
 class NotificationProvider extends ChangeNotifier {
-  final _firestore = FirebaseFirestore.instance;
+  final FirebaseFirestore _firestore;
+  final PushMessaging     _messaging;
+  final bool              _supported;
 
   bool    _enabled = false;
   bool    _busy    = false;
   String? _uid;
   List<IrrigationNotification> _items = [];
 
-  StreamSubscription<User?>? _authSub;
+  StreamSubscription<String?>? _authSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _listSub;
   StreamSubscription<String>? _tokenSub;
 
@@ -32,30 +34,41 @@ class NotificationProvider extends ChangeNotifier {
 
   /// En iOS FCM necesita una clave APNs de una cuenta de Apple Developer de
   /// paga, que el equipo no tiene (pendiente del Sprint 5 → Sprint 6).
-  bool get supported => !Platform.isIOS;
+  bool get supported => _supported;
 
-  NotificationProvider() {
-    _authSub = FirebaseAuth.instance.authStateChanges().listen(_onUser);
+  /// Las dependencias se inyectan en las pruebas; en la app se usan
+  /// Firestore, la sesión de Firebase Auth y FCM.
+  NotificationProvider({
+    FirebaseFirestore? firestore,
+    Stream<String?>?   uidChanges,
+    PushMessaging?     messaging,
+    bool?              supported,
+  })  : _firestore = firestore ?? FirebaseFirestore.instance,
+        _messaging = messaging ?? FcmMessaging(),
+        _supported = supported ?? !Platform.isIOS {
+    _authSub = (uidChanges ??
+            FirebaseAuth.instance.authStateChanges().map((u) => u?.uid))
+        .listen(_onUser);
   }
 
-  Future<void> _onUser(User? user) async {
+  Future<void> _onUser(String? uid) async {
     await _listSub?.cancel();
     await _tokenSub?.cancel();
-    _uid = user?.uid;
+    _uid = uid;
     _items = [];
     _enabled = false;
     notifyListeners();
-    if (user == null) return;
+    if (uid == null) return;
 
     try {
-      final profile = await _firestore.doc('users/${user.uid}').get();
+      final profile = await _firestore.doc('users/$uid').get();
       _enabled = profile.data()?['notificationsEnabled'] == true;
     } catch (e) {
       debugPrint('[Avisos] No se pudo leer el consentimiento: $e');
     }
 
     _listSub = _firestore
-        .collection('users/${user.uid}/notifications')
+        .collection('users/$uid/notifications')
         .orderBy('createdAt', descending: true)
         .limit(50)
         .snapshots()
@@ -71,7 +84,7 @@ class NotificationProvider extends ChangeNotifier {
 
     // Si FCM cambia el token, se reemplaza el guardado (solo con consentimiento)
     if (supported) {
-      _tokenSub = FirebaseMessaging.instance.onTokenRefresh.listen((token) {
+      _tokenSub = _messaging.onTokenRefresh.listen((token) {
         if (_enabled) _saveToken(token);
       });
     }
@@ -88,8 +101,7 @@ class NotificationProvider extends ChangeNotifier {
     }
     _setBusy(true);
     try {
-      final settings = await FirebaseMessaging.instance.requestPermission();
-      if (settings.authorizationStatus == AuthorizationStatus.denied) {
+      if (!await _messaging.requestPermission()) {
         return 'Permiso de notificaciones denegado. Actívalo en los ajustes del teléfono.';
       }
 
@@ -100,7 +112,7 @@ class NotificationProvider extends ChangeNotifier {
         'updatedAt': FieldValue.serverTimestamp(),
       }, SetOptions(merge: true));
 
-      final token = await FirebaseMessaging.instance.getToken();
+      final token = await _messaging.getToken();
       if (token == null) return 'No se pudo obtener el identificador del teléfono.';
       await _saveToken(token);
 
@@ -121,11 +133,11 @@ class NotificationProvider extends ChangeNotifier {
     _setBusy(true);
     try {
       if (supported) {
-        final token = await FirebaseMessaging.instance.getToken();
+        final token = await _messaging.getToken();
         if (token != null) {
           await _firestore.doc('users/$uid/fcmTokens/$token').delete();
         }
-        await FirebaseMessaging.instance.deleteToken();
+        await _messaging.deleteToken();
       }
       await _firestore.doc('users/$uid').set({
         'notificationsEnabled': false,
