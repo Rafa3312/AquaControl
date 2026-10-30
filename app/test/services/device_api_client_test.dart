@@ -193,7 +193,7 @@ void main() {
   });
 
   group('POST /on y /off', () {
-    test('CP-10 encender con duración envía {"duration": 15}', () async {
+    test('CP-10 encender con duración envía zona 1 y {"duration": 15}', () async {
       // Arrange
       http.Request? sent;
       final mock = MockClient((req) async {
@@ -209,7 +209,7 @@ void main() {
       // Assert
       expect(sent!.method, 'POST');
       expect(sent!.url.path, '/on');
-      expect(jsonDecode(sent!.body), {'duration': 15});
+      expect(jsonDecode(sent!.body), {'zone': 1, 'duration': 15});
       expect(res['valve'], isTrue);
     });
 
@@ -324,6 +324,79 @@ void main() {
       expect(sent!.url.path, '/schedules/active');
       expect(jsonDecode(sent!.body), {'id': 'p1', 'active': true});
       expect(res['ok'], isTrue);
+    });
+  });
+
+  group('Zonas de riego (Sprint 5)', () {
+    test('CP-17 encender la zona 2 envía solo esa zona', () async {
+      // Arrange
+      http.Request? sent;
+      final mock = MockClient((req) async {
+        sent = req;
+        return json(200, {'ok': true, 'zone': 2, 'valve': true});
+      });
+      final api =
+          DeviceApiClient(baseUri: baseUri, token: validToken, client: mock);
+
+      // Act
+      final res = await api.turnOn(zone: 2, durationMinutes: 10);
+
+      // Assert
+      expect(jsonDecode(sent!.body), {'zone': 2, 'duration': 10});
+      expect(res['zone'], 2);
+    });
+
+    test('CP-18 zona inexistente (3) se rechaza sin llegar a la red', () {
+      // Arrange
+      var requests = 0;
+      final api = DeviceApiClient(
+          baseUri: baseUri,
+          token: validToken,
+          client: MockClient((_) async {
+            requests++;
+            return json(200, {'ok': true});
+          }));
+
+      // Act
+      void call() => api.turnOn(zone: 3);
+
+      // Assert
+      expect(call, throwsRangeError);
+      expect(requests, 0);
+    });
+
+    test('CP-19 apagar una zona envía {"zone": 2}', () async {
+      // Arrange
+      http.Request? sent;
+      final mock = MockClient((req) async {
+        sent = req;
+        return json(200, {'ok': true, 'zone': 2, 'valve': false});
+      });
+      final api =
+          DeviceApiClient(baseUri: baseUri, token: validToken, client: mock);
+
+      // Act
+      await api.turnOff(zone: 2);
+
+      // Assert
+      expect(jsonDecode(sent!.body), {'zone': 2});
+    });
+
+    test('CP-20 apagar sin zona apaga todas (cuerpo vacío)', () async {
+      // Arrange
+      http.Request? sent;
+      final mock = MockClient((req) async {
+        sent = req;
+        return json(200, {'ok': true, 'valve': false});
+      });
+      final api =
+          DeviceApiClient(baseUri: baseUri, token: validToken, client: mock);
+
+      // Act
+      await api.turnOff();
+
+      // Assert
+      expect(jsonDecode(sent!.body), <String, dynamic>{});
     });
   });
 }

@@ -5,6 +5,10 @@ import '../../theme/app_theme.dart';
 import '../../providers/auth_provider.dart';
 import '../../providers/irrigation_provider.dart';
 import '../../providers/schedule_provider.dart';
+import '../../providers/zone_provider.dart';
+import '../../providers/notification_provider.dart';
+import '../../models/schedule.dart';
+import '../notifications/notifications_screen.dart';
 import '../main_screen.dart';
 
 class HomeTab extends StatefulWidget {
@@ -43,7 +47,10 @@ class _HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
     final auth = context.watch<AuthProvider>();
     final irr = context.watch<IrrigationProvider>();
     final sched = context.watch<ScheduleProvider>();
+    final names = context.watch<ZoneProvider>();
+    final notif = context.watch<NotificationProvider>();
     final active = irr.isActive;
+    final zoneName = names.nameOf(irr.selectedZone);
 
     return Scaffold(
       backgroundColor: AppTheme.bgPrimary,
@@ -78,6 +85,21 @@ class _HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
               ],
             ),
             actions: [
+              // Notificaciones de riego (HU-8)
+              IconButton(
+                tooltip: 'Notificaciones',
+                onPressed: () => Navigator.of(context).push(
+                  MaterialPageRoute(builder: (_) => const NotificationsScreen()),
+                ),
+                icon: Badge(
+                  isLabelVisible: notif.failureCount > 0,
+                  backgroundColor: AppTheme.danger,
+                  smallSize: 8,
+                  child: const Icon(Icons.notifications_none_rounded,
+                      color: AppTheme.textSecondary),
+                ),
+              ),
+
               // Indicador de dispositivo
               Container(
                 margin: const EdgeInsets.only(right: 8),
@@ -136,16 +158,28 @@ class _HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 100),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
+                // ── Selector de zona (HU-7) ───────────────────────────────────
+                _ZoneSelector(irr: irr, names: names),
+                const SizedBox(height: 16),
+
                 // ── Tarjeta de estado principal ──────────────────────────────
-                _StatusCard(active: active, irr: irr, waveCtrl: _waveCtrl),
+                _StatusCard(
+                  active: active,
+                  irr: irr,
+                  names: names,
+                  zoneName: zoneName,
+                  waveCtrl: _waveCtrl,
+                ),
                 const SizedBox(height: 20),
 
-                // ── Control manual ────────────────────────────────────────────
-                _ManualControlCard(irr: irr),
+                // ── Control manual (zona seleccionada) ───────────────────────
+                _ManualControlCard(irr: irr, zoneName: zoneName),
                 const SizedBox(height: 20),
 
-                // ── Programación activa ───────────────────────────────────────
-                _ActiveScheduleCard(sched: sched),
+                // ── Programación activa de la zona ────────────────────────────
+                _ActiveScheduleCard(
+                  active: sched.activeScheduleFor(irr.selectedZone),
+                ),
                 const SizedBox(height: 20),
 
                 // ── Stats del día ─────────────────────────────────────────────
@@ -165,9 +199,17 @@ class _HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
 class _StatusCard extends StatelessWidget {
   final bool active;
   final IrrigationProvider irr;
+  final ZoneProvider names;
+  final String zoneName;
   final AnimationController waveCtrl;
 
-  const _StatusCard({required this.active, required this.irr, required this.waveCtrl});
+  const _StatusCard({
+    required this.active,
+    required this.irr,
+    required this.names,
+    required this.zoneName,
+    required this.waveCtrl,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -237,6 +279,14 @@ class _StatusCard extends StatelessWidget {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
+                      Text(
+                        zoneName,
+                        style: const TextStyle(
+                          color: AppTheme.textSecondary,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
                       Text(
                         irr.statusLabel,
                         style: TextStyle(
@@ -317,6 +367,13 @@ class _StatusCard extends StatelessWidget {
                 ],
               ),
             ],
+
+            // Estado de cada zona
+            const SizedBox(height: 18),
+            Divider(color: color.withValues(alpha: 0.2)),
+            const SizedBox(height: 10),
+            for (final z in irr.zones)
+              _ZoneStateRow(zone: z, name: names.nameOf(z.id)),
           ],
         ),
       ),
@@ -329,7 +386,8 @@ class _StatusCard extends StatelessWidget {
 // ══════════════════════════════════════════════════════════════════════════════
 class _ManualControlCard extends StatelessWidget {
   final IrrigationProvider irr;
-  const _ManualControlCard({required this.irr});
+  final String zoneName;
+  const _ManualControlCard({required this.irr, required this.zoneName});
 
   @override
   Widget build(BuildContext context) {
@@ -356,12 +414,15 @@ class _ManualControlCard extends StatelessWidget {
                   color: blocked ? AppTheme.warning : AppTheme.primary,
                   size: 20),
               const SizedBox(width: 10),
-              Text(
-                'Control manual',
-                style: TextStyle(
-                  color: blocked ? AppTheme.warning : AppTheme.textPrimary,
-                  fontSize: 16,
-                  fontWeight: FontWeight.w700,
+              Expanded(
+                child: Text(
+                  'Control manual · $zoneName',
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: blocked ? AppTheme.warning : AppTheme.textPrimary,
+                    fontSize: 16,
+                    fontWeight: FontWeight.w700,
+                  ),
                 ),
               ),
             ],
@@ -370,7 +431,7 @@ class _ManualControlCard extends StatelessWidget {
           Text(
             blocked
                 ? 'Bloqueado — programación en curso. Apaga el riego primero si quieres interrumpirla.'
-                : 'Enciende o apaga el riego para probar tus aspersores',
+                : 'Enciende o apaga el riego de esta zona sin afectar a las demás',
             style: TextStyle(
               color: blocked ? AppTheme.warning : AppTheme.textSecondary,
               fontSize: 12,
@@ -387,7 +448,7 @@ class _ManualControlCard extends StatelessWidget {
                   icon: Icons.play_arrow_rounded,
                   color: AppTheme.success,
                   enabled: canStart,
-                  onTap: canStart ? irr.turnOn : null,
+                  onTap: canStart ? () => irr.turnOn() : null,
                 ),
               ),
               const SizedBox(width: 12),
@@ -397,7 +458,7 @@ class _ManualControlCard extends StatelessWidget {
                   icon: Icons.stop_rounded,
                   color: AppTheme.danger,
                   enabled: canStop,
-                  onTap: canStop ? irr.turnOff : null,
+                  onTap: canStop ? () => irr.turnOff() : null,
                 ),
               ),
             ],
@@ -586,12 +647,12 @@ class _ControlButton extends StatelessWidget {
 // Programación activa
 // ══════════════════════════════════════════════════════════════════════════════
 class _ActiveScheduleCard extends StatelessWidget {
-  final ScheduleProvider sched;
-  const _ActiveScheduleCard({required this.sched});
+  final Schedule? active;
+  const _ActiveScheduleCard({required this.active});
 
   @override
   Widget build(BuildContext context) {
-    final active = sched.activeSchedule;
+    final active = this.active;
 
     return Container(
       decoration: BoxDecoration(
@@ -643,7 +704,7 @@ class _ActiveScheduleCard extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        'Sin programación activa',
+                        'Sin programación activa en esta zona',
                         style: TextStyle(
                           color: AppTheme.textPrimary,
                           fontWeight: FontWeight.w600,
@@ -888,6 +949,112 @@ class _AvatarButton extends StatelessWidget {
             fontWeight: FontWeight.w800,
           ),
         ),
+      ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Selector de zona del Dashboard (HU-7)
+// ══════════════════════════════════════════════════════════════════════════════
+class _ZoneSelector extends StatelessWidget {
+  final IrrigationProvider irr;
+  final ZoneProvider names;
+  const _ZoneSelector({required this.irr, required this.names});
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      children: [
+        for (final z in irr.zones) ...[
+          if (z.id > 1) const SizedBox(width: 10),
+          Expanded(
+            child: GestureDetector(
+              onTap: () => irr.selectZone(z.id),
+              child: AnimatedContainer(
+                duration: const Duration(milliseconds: 200),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+                decoration: BoxDecoration(
+                  color: irr.selectedZone == z.id
+                      ? AppTheme.primary.withValues(alpha: 0.18)
+                      : AppTheme.bgCard,
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: irr.selectedZone == z.id ? AppTheme.primary : AppTheme.divider,
+                  ),
+                ),
+                child: Row(
+                  children: [
+                    Container(
+                      width: 8,
+                      height: 8,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: z.fault && !z.isActive
+                            ? AppTheme.danger
+                            : z.isActive
+                                ? AppTheme.success
+                                : AppTheme.textMuted,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        names.nameOf(z.id),
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: irr.selectedZone == z.id
+                              ? AppTheme.primary
+                              : AppTheme.textSecondary,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 13,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ],
+    );
+  }
+}
+
+/// Fila de la tarjeta de estado con el riego de cada zona.
+class _ZoneStateRow extends StatelessWidget {
+  final ZoneRuntime zone;
+  final String name;
+  const _ZoneStateRow({required this.zone, required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = zone.fault && !zone.isActive
+        ? AppTheme.danger
+        : zone.isActive
+            ? AppTheme.success
+            : AppTheme.textMuted;
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Icon(
+            zone.isActive ? Icons.water_drop_rounded : Icons.water_drop_outlined,
+            color: color,
+            size: 16,
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(name,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(color: AppTheme.textPrimary, fontSize: 13)),
+          ),
+          Text(
+            zone.isActive ? '${zone.statusLabel} · ${zone.elapsedTime}' : zone.statusLabel,
+            style: TextStyle(color: color, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ],
       ),
     );
   }

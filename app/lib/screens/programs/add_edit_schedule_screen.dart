@@ -2,7 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/schedule.dart';
+import '../../models/zone.dart';
+import '../../providers/irrigation_provider.dart';
 import '../../providers/schedule_provider.dart';
+import '../../providers/zone_provider.dart';
 
 class AddEditScheduleScreen extends StatefulWidget {
   final Schedule? existing;
@@ -17,6 +20,7 @@ class _AddEditScheduleScreenState extends State<AddEditScheduleScreen> {
   List<int> _selectedDays = [];
   TimeOfDay _selectedTime = TimeOfDay.now();
   int _duration = 20; // minutos
+  int _zone = 1;
 
   bool _loading = false;
   bool get _isEditing => widget.existing != null;
@@ -35,6 +39,10 @@ class _AddEditScheduleScreenState extends State<AddEditScheduleScreen> {
       _selectedDays = List.from(s.days);
       _selectedTime = TimeOfDay(hour: s.startHour, minute: s.startMinute);
       _duration = s.durationMinutes;
+      _zone = s.zone;
+    } else {
+      // Nueva programación: por defecto, la zona elegida en el Dashboard
+      _zone = context.read<IrrigationProvider>().selectedZone;
     }
   }
 
@@ -83,6 +91,7 @@ class _AddEditScheduleScreenState extends State<AddEditScheduleScreen> {
         startHour: _selectedTime.hour,
         startMinute: _selectedTime.minute,
         durationMinutes: _duration,
+        zone: _zone,
       );
       await provider.updateSchedule(updated);
     } else {
@@ -92,6 +101,7 @@ class _AddEditScheduleScreenState extends State<AddEditScheduleScreen> {
         hour: _selectedTime.hour,
         minute: _selectedTime.minute,
         duration: _duration,
+        zone: _zone,
       );
       await provider.addSchedule(s);
     }
@@ -153,6 +163,16 @@ class _AddEditScheduleScreenState extends State<AddEditScheduleScreen> {
                 hintText: 'Ej: Riego matutino',
                 prefixIcon: Icon(Icons.label_outline_rounded),
               ),
+            ),
+
+            const SizedBox(height: 28),
+
+            // Zona (HU-7)
+            _sectionTitle('Zona de riego'),
+            const SizedBox(height: 12),
+            _ZonePicker(
+              selected: _zone,
+              onChanged: (z) => setState(() => _zone = z),
             ),
 
             const SizedBox(height: 28),
@@ -423,6 +443,40 @@ class _QuickChip extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Selector de zona
+// ══════════════════════════════════════════════════════════════════════════════
+class _ZonePicker extends StatelessWidget {
+  final int selected;
+  final ValueChanged<int> onChanged;
+
+  const _ZonePicker({required this.selected, required this.onChanged});
+
+  @override
+  Widget build(BuildContext context) {
+    final names = context.watch<ZoneProvider>();
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: [
+        for (final id in Zones.ids)
+          ChoiceChip(
+            label: Text(names.nameOf(id)),
+            selected: selected == id,
+            onSelected: (_) => onChanged(id),
+            selectedColor: AppTheme.primary.withValues(alpha: 0.25),
+            backgroundColor: AppTheme.bgCard,
+            side: BorderSide(color: selected == id ? AppTheme.primary : AppTheme.divider),
+            labelStyle: TextStyle(
+              color: selected == id ? AppTheme.primary : AppTheme.textSecondary,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+      ],
     );
   }
 }

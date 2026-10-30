@@ -1,47 +1,88 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../models/zone.dart';
 import 'device_provider.dart';
 
 enum IrrigationStatus { idle, active, scheduled, error }
 
-class IrrigationProvider extends ChangeNotifier {
-  DeviceProvider? _device;
-  Timer?          _pollTimer;   // Consulta periódica al ESP cada 5s
+/// Estado del riego de una zona en la app.
+class ZoneRuntime {
+  final int id;
+  IrrigationStatus status = IrrigationStatus.idle;
+  bool manualOverride = false;
+  bool scheduledRun = false;
+  bool fault = false;
+  DateTime? startTime;
+  String? stopAt;
 
-  IrrigationStatus _status         = IrrigationStatus.idle;
-  bool             _manualOverride = false;
-  bool             _scheduledRun   = false; // corriendo por programación
-  DateTime?        _startTime;
-  double           _waterUsageToday = 0;
-  int              _sessionsToday   = 0;
+  ZoneRuntime(this.id);
 
-  IrrigationStatus get status         => _status;
-  bool   get manualOverride  => _manualOverride;
-  bool   get isActive        => _status == IrrigationStatus.active;
-  bool   get isScheduledRun  => _scheduledRun; // para bloquear botones manuales
-  bool   get canManualControl => !_scheduledRun; // false = botones deshabilitados
-  DateTime? get startTime    => _startTime;
-  bool   get deviceOnline    => _device?.isConnected ?? false;
-  double get waterUsageToday => _waterUsageToday;
-  int    get sessionsToday   => _sessionsToday;
+  bool get isActive => status == IrrigationStatus.active;
 
   String get statusLabel {
-    switch (_status) {
+    if (fault && !isActive) return 'Falla en la válvula';
+    switch (status) {
       case IrrigationStatus.active:
-        return _scheduledRun ? 'Riego Programado' : 'Riego Manual';
-      case IrrigationStatus.scheduled: return 'Programado';
-      case IrrigationStatus.error:     return 'Error de conexión';
-      case IrrigationStatus.idle:      return 'En reposo';
+        return scheduledRun ? 'Riego Programado' : 'Riego Manual';
+      case IrrigationStatus.scheduled:
+        return 'Programado';
+      case IrrigationStatus.error:
+        return 'Error de conexión';
+      case IrrigationStatus.idle:
+        return 'En reposo';
     }
   }
 
   String get elapsedTime {
-    if (_startTime == null) return '00:00';
-    final d = DateTime.now().difference(_startTime!);
+    if (startTime == null) return '00:00';
+    final d = DateTime.now().difference(startTime!);
     final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
     final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
+}
+
+/// Controla el riego de cada zona. Las propiedades sin zona (isActive,
+/// statusLabel, turnOn…) se refieren a la zona seleccionada en el Dashboard.
+class IrrigationProvider extends ChangeNotifier {
+  DeviceProvider? _device;
+  Timer?          _pollTimer;   // Consulta periódica al ESP cada 5s
+
+  final Map<int, ZoneRuntime> _zones = {
+    for (final id in Zones.ids) id: ZoneRuntime(id),
+  };
+  int    _selectedZone    = 1;
+  double _waterUsageToday = 0;
+  int    _sessionsToday   = 0;
+
+  // ── Zonas ────────────────────────────────────────────────────────────────
+  List<ZoneRuntime> get zones => _zones.values.toList();
+  ZoneRuntime zone(int id) => _zones[id]!;
+  int  get selectedZone => _selectedZone;
+  bool get anyActive    => _zones.values.any((z) => z.isActive);
+  int  get activeCount  => _zones.values.where((z) => z.isActive).length;
+
+  void selectZone(int id) {
+    if (!Zones.isValid(id) || id == _selectedZone) return;
+    _selectedZone = id;
+    notifyListeners();
+  }
+
+  ZoneRuntime get _sel => _zones[_selectedZone]!;
+
+  // ── Zona seleccionada ────────────────────────────────────────────────────
+  IrrigationStatus get status         => _sel.status;
+  bool   get manualOverride  => _sel.manualOverride;
+  bool   get isActive        => _sel.isActive;
+  bool   get isScheduledRun  => _sel.scheduledRun; // para bloquear botones manuales
+  bool   get canManualControl => !_sel.scheduledRun;
+  DateTime? get startTime    => _sel.startTime;
+  String get statusLabel     => _sel.statusLabel;
+  String get elapsedTime     => _sel.elapsedTime;
+
+  bool   get deviceOnline    => _device?.isConnected ?? false;
+  double get waterUsageToday => _waterUsageToday;
+  int    get sessionsToday   => _sessionsToday;
 
   // ── Inyectar DeviceProvider ─────────────────────────────────────────────
   void setDeviceProvider(DeviceProvider device) {
@@ -62,104 +103,123 @@ class IrrigationProvider extends ChangeNotifier {
   }
 
   // ══════════════════════════════════════════════════════════════════════════
-  // SINCRONIZACIÓN CON EL ESP ← esto es lo que faltaba
+  // SINCRONIZACIÓN CON EL ESP (estado de cada zona)
   // ══════════════════════════════════════════════════════════════════════════
   Future<void> syncStatus() async {
     final espStatus = await _device?.getStatus();
     if (espStatus == null) return;
 
-    final valveOpen = espStatus['valve'] == true;
-    final isManual  = espStatus['manual'] == true;
-
-    if (valveOpen && !isActive) {
-      // El ESP está regando pero la app no lo sabía → actualizar
-      _status        = IrrigationStatus.active;
-      _manualOverride = isManual;
-      _scheduledRun  = !isManual;
-      _startTime     ??= DateTime.now(); // no sobreescribir si ya tenía
-      notifyListeners();
-    } else if (!valveOpen && isActive) {
-      // El ESP terminó de regar (programación cumplió duración)
-      _finishSession();
-      notifyListeners();
+    var changed = false;
+    for (final zs in ZoneStatus.listFromStatus(espStatus)) {
+      final z = _zones[zs.id]!;
+      if (zs.valveOpen && !z.isActive) {
+        // El ESP está regando pero la app no lo sabía → actualizar
+        z.status         = IrrigationStatus.active;
+        z.manualOverride = zs.manual;
+        z.scheduledRun   = !zs.manual;
+        z.startTime    ??= DateTime.now(); // no sobreescribir si ya tenía
+        changed = true;
+      } else if (!zs.valveOpen && z.isActive) {
+        // El ESP terminó de regar esa zona
+        _finishSession(z);
+        changed = true;
+      }
+      if (z.fault != zs.fault || z.stopAt != zs.stopAt) {
+        z.fault  = zs.fault;
+        z.stopAt = zs.stopAt;
+        changed = true;
+      }
     }
+    if (changed) notifyListeners();
   }
 
   // ── Encender manual ──────────────────────────────────────────────────────
-  Future<void> turnOn() async {
-    if (isActive) return;
+  Future<void> turnOn({int? zone}) async {
+    final z = _zones[zone ?? _selectedZone]!;
+    if (z.isActive) return;
 
     // Optimistic UI
-    _status         = IrrigationStatus.active;
-    _manualOverride = true;
-    _scheduledRun   = false;
-    _startTime      = DateTime.now();
+    z.status         = IrrigationStatus.active;
+    z.manualOverride = true;
+    z.scheduledRun   = false;
+    z.fault          = false;
+    z.startTime      = DateTime.now();
     notifyListeners();
 
-    final ok = await _device?.turnOn(durationMinutes: 0) ?? false;
+    final ok = await _device?.turnOn(zone: z.id, durationMinutes: 0) ?? false;
     if (!ok) {
-      _status         = IrrigationStatus.error;
-      _manualOverride = false;
-      _startTime      = null;
+      z.status         = IrrigationStatus.error;
+      z.manualOverride = false;
+      z.startTime      = null;
       notifyListeners();
     }
   }
 
-  // ── Modo prueba rápida (30 segundos) ─────────────────────────────────────
-  Future<void> turnOnTest({int seconds = 30}) async {
-    if (isActive) return;
-    _status         = IrrigationStatus.active;
-    _manualOverride = true;
-    _scheduledRun   = false;
-    _startTime      = DateTime.now();
+  // ── Modo prueba rápida ───────────────────────────────────────────────────
+  Future<void> turnOnTest({int seconds = 30, int? zone}) async {
+    final z = _zones[zone ?? _selectedZone]!;
+    if (z.isActive) return;
+    z.status         = IrrigationStatus.active;
+    z.manualOverride = true;
+    z.scheduledRun   = false;
+    z.fault          = false;
+    z.startTime      = DateTime.now();
     notifyListeners();
 
     // Enviar duración en minutos (redondeado hacia arriba, mínimo 1)
-    final durationMin = (seconds / 60).ceil().clamp(1, 480);
-    final ok = await _device?.turnOn(durationMinutes: durationMin) ?? false;
+    final durationMin = (seconds / 60).ceil().clamp(1, 120);
+    final ok = await _device?.turnOn(zone: z.id, durationMinutes: durationMin) ?? false;
     if (!ok) {
-      _status     = IrrigationStatus.error;
-      _startTime  = null;
+      z.status    = IrrigationStatus.error;
+      z.startTime = null;
       notifyListeners();
       return;
     }
 
     // Timer local para mostrar que terminó en la UI
     Timer(Duration(seconds: seconds), () {
-      if (isActive && _manualOverride) {
-        _finishSession();
+      if (z.isActive && z.manualOverride) {
+        _finishSession(z);
         notifyListeners();
       }
     });
   }
 
   // ── Apagar manual ────────────────────────────────────────────────────────
-  Future<void> turnOff() async {
-    if (!isActive) return;
-    _finishSession();
+  Future<void> turnOff({int? zone}) async {
+    final z = _zones[zone ?? _selectedZone]!;
+    if (!z.isActive) return;
+    _finishSession(z);
     notifyListeners();
-    await _device?.turnOff();
+    await _device?.turnOff(zone: z.id);
   }
+
+  /// Interruptor de la pantalla "Zonas de riego".
+  Future<void> toggleZone(int id) =>
+      _zones[id]!.isActive ? turnOff(zone: id) : turnOn(zone: id);
 
   // ── Activar desde scheduler interno de Flutter ───────────────────────────
-  void activateFromSchedule() {
-    _status        = IrrigationStatus.active;
-    _manualOverride = false;
-    _scheduledRun  = true;
-    _startTime     = DateTime.now();
+  void activateFromSchedule(int zone) {
+    final z = _zones[zone];
+    if (z == null) return;
+    z.status         = IrrigationStatus.active;
+    z.manualOverride = false;
+    z.scheduledRun   = true;
+    z.startTime      = DateTime.now();
     notifyListeners();
   }
 
-  void _finishSession() {
-    if (_startTime != null) {
-      final dur = DateTime.now().difference(_startTime!);
+  void _finishSession(ZoneRuntime z) {
+    if (z.startTime != null) {
+      final dur = DateTime.now().difference(z.startTime!);
       _waterUsageToday += dur.inMinutes * 0.8;
       if (dur.inSeconds >= 10) _sessionsToday++; // solo contar si duró algo
     }
-    _status         = IrrigationStatus.idle;
-    _manualOverride = false;
-    _scheduledRun   = false;
-    _startTime      = null;
+    z.status         = IrrigationStatus.idle;
+    z.manualOverride = false;
+    z.scheduledRun   = false;
+    z.startTime      = null;
+    z.stopAt         = null;
   }
 
   void resetDailyStats() {

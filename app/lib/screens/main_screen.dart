@@ -5,6 +5,7 @@ import '../theme/app_theme.dart';
 import '../providers/auth_provider.dart';
 import 'home/home_tab.dart';
 import 'programs/programs_tab.dart';
+import 'zones/zones_tab.dart';
 import 'reports/reports_tab.dart';
 import 'profile/profile_drawer.dart';
 
@@ -19,7 +20,7 @@ class _MainScreenState extends State<MainScreen> {
   int _currentIndex = 0;
   final _scaffoldKey = GlobalKey<ScaffoldState>();
 
-  static const _tabs = [HomeTab(), ProgramsTab(), ReportsTab()];
+  static const _tabs = [HomeTab(), ZonesTab(), ProgramsTab(), ReportsTab()];
 
   void openDrawer() => _scaffoldKey.currentState?.openDrawer();
 
@@ -116,10 +117,18 @@ class _BottomNav extends StatelessWidget {
                 onTap: onTap,
               ),
               _NavItem(
+                icon: Icons.grid_view_outlined,
+                activeIcon: Icons.grid_view_rounded,
+                label: 'Zonas',
+                index: 1,
+                currentIndex: currentIndex,
+                onTap: onTap,
+              ),
+              _NavItem(
                 icon: Icons.calendar_month_outlined,
                 activeIcon: Icons.calendar_month_rounded,
                 label: 'Programas',
-                index: 1,
+                index: 2,
                 currentIndex: currentIndex,
                 onTap: onTap,
               ),
@@ -127,7 +136,7 @@ class _BottomNav extends StatelessWidget {
                 icon: Icons.bar_chart_outlined,
                 activeIcon: Icons.bar_chart_rounded,
                 label: 'Reportes',
-                index: 2,
+                index: 3,
                 currentIndex: currentIndex,
                 onTap: onTap,
               ),
@@ -165,7 +174,7 @@ class _NavItem extends StatelessWidget {
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
         duration: const Duration(milliseconds: 200),
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 8),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
           color: isActive
               ? AppTheme.primary.withOpacity(0.12)

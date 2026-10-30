@@ -13,6 +13,13 @@ class ScheduleProvider extends ChangeNotifier {
   bool get loading => _loading;
   Schedule? get activeSchedule =>
       _schedules.where((s) => s.isActive).firstOrNull;
+
+  /// Programación activa de una zona (solo puede haber una por zona).
+  Schedule? activeScheduleFor(int zone) =>
+      _schedules.where((s) => s.isActive && s.zone == zone).firstOrNull;
+
+  List<Schedule> schedulesFor(int zone) =>
+      _schedules.where((s) => s.zone == zone).toList();
   int get totalCount => _schedules.length;
 
   ScheduleProvider() {
@@ -60,14 +67,18 @@ class ScheduleProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  // Solo una programación puede estar activa a la vez
+  // Solo una programación activa POR ZONA: activar una desactiva las demás
+  // de la misma zona; las de otras zonas no cambian.
   Future<void> toggleActive(String id) async {
-    for (final s in _schedules) {
-      s.isActive = (s.id == id) ? !s.isActive : false;
-      // Si el que activamos ya estaba activo, lo dejamos en false
+    final target = _schedules.where((s) => s.id == id).firstOrNull;
+    if (target == null) return;
+    final activate = !target.isActive;
+    if (activate) {
+      for (final s in _schedules) {
+        if (s.zone == target.zone) s.isActive = false;
+      }
     }
-    // Corregir: si el id ya era activo, el toggle lo desactivó
-    // (la lógica anterior ya lo maneja con el not)
+    target.isActive = activate;
     await _save();
     notifyListeners();
   }
@@ -78,6 +89,7 @@ class ScheduleProvider extends ChangeNotifier {
     required int hour,
     required int minute,
     required int duration,
+    int zone = 1,
   }) =>
       Schedule(
         id: const Uuid().v4(),
@@ -86,5 +98,6 @@ class ScheduleProvider extends ChangeNotifier {
         startHour: hour,
         startMinute: minute,
         durationMinutes: duration,
+        zone: zone,
       );
 }

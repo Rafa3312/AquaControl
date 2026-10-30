@@ -1,10 +1,13 @@
 /**
  * ============================================================
- *  AquaControl – Firmware ESP32  v3.1  (Hardened + NTP + ResetPIN)
+ *  AquaControl – Firmware ESP32  v3.2  (Multizona + Avisos)
  * ============================================================
  *
  *  Hardware:
- *    ESP32 + RTC DS3231 (SDA=21, SCL=22) + MOSFET en GPIO23
+ *    ESP32 + RTC DS3231 (SDA=21, SCL=22)
+ *    Relé / MOSFET zona 1 = GPIO23   ·   zona 2 = GPIO19
+ *    Sensores de retroalimentación opcionales (corriente o flujo):
+ *      zona 1 = GPIO34 · zona 2 = GPIO35 (solo entrada, usar pull-down externo)
  *    LED integrado = GPIO2
  *
  *  Librerías (Herramientas → Administrar bibliotecas):
@@ -13,6 +16,7 @@
  *
  *  PRIMERA VEZ: el ESP crea red WiFi "AquaControl-XXXXXX"
  *  La contraseña y el Reset PIN aparecen en Monitor Serial (115200).
+ *
  * ============================================================
  */
 
@@ -24,13 +28,15 @@
 #include <Wire.h>
 #include <RTClib.h>
 #include <ArduinoJson.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <esp_system.h>
 #include <esp_random.h>
 #include <time.h>
 
 // ─── Configuración ───────────────────────────────────────────────────────────
+#define FW_VERSION         "3.2"
 #define MDNS_NAME          "aquacontrol"
-#define PIN_VALVULA        23
 #define SDA_PIN            21
 #define SCL_PIN            22
 #define LED_PIN            2
@@ -44,6 +50,74 @@
 // Zona horaria: UTC-6 México Centro = -21600 | UTC-5 = -18000 | UTC-7 = -25200
 #define TZ_OFFSET_SECONDS  -21600
 
+// ─── Zonas ───────────────────────────────────────────────────────────────────
+#define ZONE_COUNT         2
+const uint8_t ZONE_PINS[ZONE_COUNT]       = {23, 19};
+const uint8_t ZONE_SENSE_PINS[ZONE_COUNT] = {34, 35};
+// true solo si cada zona tiene sensor de retroalimentación conectado;
+// sin sensor, las entradas quedan flotando y se detectarían fallas falsas.
+#define FAULT_DETECTION    false
+#define FAULT_CHECK_MS     4000          // tiempo para que la válvula responda
+#define MAX_MANUAL_MIN     120           // riego manual máximo (min)
+#define MAX_SCHEDULE_MIN   120           // duración máxima de una programación (min)
+
+// ─── Avisos (notificaciones) ─────────────────────────────────────────────────
+// URL de la Cloud Function deviceEvent. Vacía = avisos desactivados.
+// Ej: "https://us-central1-<id-del-proyecto>.cloudfunctions.net/deviceEvent"
+#define EVENT_URL          ""
+#define EVENT_QUEUE_SIZE   8
+#define EVENT_MAX_ATTEMPTS 3
+#define EVENT_RETRY_MS     30000
+
+// Certificados raíz de Google Trust Services (GTS Root R1 y R4, vigentes a 2036)
+// para validar el HTTPS de Cloud Functions. Fuente: https://pki.goog/repository/
+static const char GOOGLE_ROOT_CAS[] PROGMEM = R"PEM(
+-----BEGIN CERTIFICATE-----
+MIIFVzCCAz+gAwIBAgINAgPlk28xsBNJiGuiFzANBgkqhkiG9w0BAQwFADBHMQsw
+CQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEU
+MBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAw
+MDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZp
+Y2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEBAQUA
+A4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaMf/vo
+27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vXmX7w
+Cl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7zUjw
+TcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0Pfybl
+qAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtcvfaH
+szVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4Zor8
+Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUspzBmk
+MiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOORc92
+wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYWk70p
+aDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+DVrN
+VjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgFlQID
+AQABo0IwQDAOBgNVHQ8BAf8EBAMCAYYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4E
+FgQU5K8rJnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBAJ+qQibb
+C5u+/x6Wki4+omVKapi6Ist9wTrYggoGxval3sBOh2Z5ofmmWJyq+bXmYOfg6LEe
+QkEzCzc9zolwFcq1JKjPa7XSQCGYzyI0zzvFIoTgxQ6KfF2I5DUkzps+GlQebtuy
+h6f88/qBVRRiClmpIgUxPoLW7ttXNLwzldMXG+gnoot7TiYaelpkttGsN/H9oPM4
+7HLwEXWdyzRSjeZ2axfG34arJ45JK3VmgRAhpuo+9K4l/3wV3s6MJT/KYnAK9y8J
+ZgfIPxz88NtFMN9iiMG1D53Dn0reWVlHxYciNuaCp+0KueIHoI17eko8cdLiA6Ef
+MgfdG+RCzgwARWGAtQsgWSl4vflVy2PFPEz0tv/bal8xa5meLMFrUKTX5hgUvYU/
+Z6tGn6D/Qqc6f1zLXbBwHSs09dR2CQzreExZBfMzQsNhFRAbd03OIozUhfJFfbdT
+6u9AWpQKXCBfTkBdYiJ23//OYb2MI3jSNwLgjt7RETeJ9r/tSQdirpLsQBqvFAnZ
+0E6yove+7u7Y/9waLd64NnHi/Hm3lCXRSHNboTXns5lndcEZOitHTtNCjv0xyBZm
+2tIMPNuzjsmhDYAPexZ3FL//2wmUspO8IFgV6dtxQ/PeEMMA3KgqlbbC1j+Qa3bb
+bP6MvPJwNQzcmRk13NfIRmPVNnGuV/u3gm3c
+-----END CERTIFICATE-----
+-----BEGIN CERTIFICATE-----
+MIICCTCCAY6gAwIBAgINAgPlwGjvYxqccpBQUjAKBggqhkjOPQQDAzBHMQswCQYD
+VQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExMQzEUMBIG
+A1UEAxMLR1RTIFJvb3QgUjQwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIyMDAwMDAw
+WjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2Vz
+IExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjQwdjAQBgcqhkjOPQIBBgUrgQQAIgNi
+AATzdHOnaItgrkO4NcWBMHtLSZ37wWHO5t5GvWvVYRg1rkDdc/eJkTBa6zzuhXyi
+QHY7qca4R9gq55KRanPpsXI5nymfopjTX15YhmUPoYRlBtHci8nHc8iMai/lxKvR
+HYqjQjBAMA4GA1UdDwEB/wQEAwIBhjAPBgNVHRMBAf8EBTADAQH/MB0GA1UdDgQW
+BBSATNbrdP9JNqPV2Py1PsVq8JQdjDAKBggqhkjOPQQDAwNpADBmAjEA6ED/g94D
+9J+uHXqnLrmvT/aDHQ4thQEd0dlq7A/Cr8deVl5c1RxYIigL9zC2L7F8AjEA8GE8
+p/SgguMh1YQdc4acLa/KNJvxn7kjNuK8YAOdgLOaVsjh4rsUecrNIdSUtUlD
+-----END CERTIFICATE-----
+)PEM";
+
 // ─── Objetos ─────────────────────────────────────────────────────────────────
 WebServer   server(80);
 DNSServer   dnsServer;
@@ -51,7 +125,18 @@ RTC_DS3231  rtc;
 Preferences prefs;
 
 // ─── Estructura de programación ──────────────────────────────────────────────
+#define SCHED_VERSION 2
 struct Schedule {
+  bool     active;
+  uint8_t  days;
+  uint8_t  startHour;
+  uint8_t  startMinute;
+  uint16_t durationMin;
+  char     id[37];
+  uint8_t  zone;          // 1..ZONE_COUNT
+};
+// Formato guardado por el firmware v3.1 (sin zona), solo para migrar.
+struct ScheduleV1 {
   bool     active;
   uint8_t  days;
   uint8_t  startHour;
@@ -62,12 +147,34 @@ struct Schedule {
 Schedule schedules[MAX_SCHEDULES];
 int      scheduleCount = 0;
 
-// ─── Estado runtime ──────────────────────────────────────────────────────────
-bool     riegoActivo    = false;
-bool     manualOverride = false;
-DateTime riegoStop;
-int      lastFiredMin   = -1;
-int      lastFiredIdx   = -1;
+// ─── Estado runtime por zona ─────────────────────────────────────────────────
+struct ZoneState {
+  bool          active;
+  bool          manual;
+  bool          timed;        // tiene hora de apagado automático
+  bool          fault;        // última activación falló
+  DateTime      stopAt;
+  DateTime      startedAt;
+  unsigned long onSinceMs;
+  int           lastFiredMin;   // evita disparar dos veces la misma
+  int           lastFiredIdx;   // programación en su ventana de ±1 min
+  int32_t       lastFiredDate;  // AAAAMMDD del último disparo
+};
+ZoneState zones[ZONE_COUNT];
+
+// ─── Cola de avisos ──────────────────────────────────────────────────────────
+enum EventType : uint8_t { EV_START, EV_END, EV_FAIL };
+struct PendingEvent {
+  uint8_t       type;
+  uint8_t       zone;          // 1..ZONE_COUNT
+  bool          manual;
+  uint16_t      minutes;
+  uint8_t       attempts;
+  unsigned long notBefore;
+};
+PendingEvent eventQueue[EVENT_QUEUE_SIZE];
+int          eventHead  = 0;
+int          eventCount = 0;
 
 // ─── Datos sensibles ─────────────────────────────────────────────────────────
 String   wifiSSID       = "";
@@ -102,18 +209,28 @@ void   saveSchedules();
 void   loadSchedules();
 
 // ── Riego ─────────────────────────────────────────────────────────────────────
-void encenderRiego(bool manual);
-void apagarRiego();
+bool validZone(int zone);
+void encenderZona(uint8_t z, bool manual, uint16_t minutes);
+void apagarZona(uint8_t z, bool notify);
+void apagarTodas(bool notify);
+bool anyZoneActive();
 void checkStop();
 void checkSchedules();
+void checkFaults();
 int  getDayBit(int dow);
 void syncNTP();
+
+// ── Avisos ────────────────────────────────────────────────────────────────────
+void queueEvent(uint8_t type, uint8_t zone, bool manual, uint16_t minutes);
+void processEvents();
+bool postEvent(const PendingEvent& e);
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
 void sendJson(int code, JsonDocument& doc);
 void sendError(int code, const char* msg);
 void blinkLED(int times);
 void logSecure(const char* event);
+String formatTime(const DateTime& t);
 
 // ══════════════════════════════════════════════════════════════════════════════
 void setup() {
@@ -121,12 +238,18 @@ void setup() {
   delay(300);
 
   Serial.println(F("\n╔═══════════════════════════════════╗"));
-  Serial.println(F("║  AquaControl  Firmware v3.1       ║"));
+  Serial.println(F("║  AquaControl  Firmware v3.2       ║"));
   Serial.println(F("╚═══════════════════════════════════╝"));
   Serial.printf("Device ID:  %s\n", getDeviceShortId().c_str());
   Serial.printf("Reset PIN:  %s  <- anota este numero\n", getResetPin().c_str());
 
-  pinMode(PIN_VALVULA, OUTPUT); digitalWrite(PIN_VALVULA, LOW);
+  for (int z = 0; z < ZONE_COUNT; z++) {
+    pinMode(ZONE_PINS[z], OUTPUT);
+    digitalWrite(ZONE_PINS[z], LOW);
+    if (FAULT_DETECTION) pinMode(ZONE_SENSE_PINS[z], INPUT);
+    zones[z] = ZoneState();
+    zones[z].lastFiredMin = zones[z].lastFiredIdx = zones[z].lastFiredDate = -1;
+  }
   pinMode(LED_PIN, OUTPUT);
 
   Wire.begin(SDA_PIN, SCL_PIN);
@@ -192,22 +315,35 @@ void setup() {
       JsonDocument doc;
       DateTime now = rtc.now();
       doc["online"]    = true;
-      doc["valve"]     = riegoActivo;
-      doc["manual"]    = manualOverride;
+      doc["valve"]     = anyZoneActive();
+      bool anyManual = false;
+      for (int z = 0; z < ZONE_COUNT; z++) anyManual |= zones[z].active && zones[z].manual;
+      doc["manual"]    = anyManual;
       doc["paired"]    = !authToken.isEmpty();
       doc["mode"]      = "normal";
       doc["device"]    = getDeviceShortId();
+      doc["firmware"]  = FW_VERSION;
       doc["schedules"] = scheduleCount;
+      doc["zoneCount"] = ZONE_COUNT;
       doc["ip"]        = WiFi.localIP().toString();
       if (!authToken.isEmpty()) doc["uid"] = linkedUID;
       char buf[24];
       snprintf(buf, sizeof(buf), "%04d-%02d-%02dT%02d:%02d:%02d",
         now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
       doc["rtc"] = buf;
-      if (riegoActivo && !manualOverride) {
-        char sb[10];
-        snprintf(sb, sizeof(sb), "%02d:%02d", riegoStop.hour(), riegoStop.minute());
-        doc["stopAt"] = sb;
+
+      JsonArray arr = doc["zones"].to<JsonArray>();
+      for (int z = 0; z < ZONE_COUNT; z++) {
+        JsonObject o = arr.add<JsonObject>();
+        o["id"]     = z + 1;
+        o["valve"]  = zones[z].active;
+        o["manual"] = zones[z].active && zones[z].manual;
+        o["fault"]  = zones[z].fault;
+        if (zones[z].active && zones[z].timed) o["stopAt"] = formatTime(zones[z].stopAt);
+      }
+      // Compatibilidad con la app v1: hora de apagado de la primera zona temporizada
+      for (int z = 0; z < ZONE_COUNT; z++) {
+        if (zones[z].active && zones[z].timed) { doc["stopAt"] = formatTime(zones[z].stopAt); break; }
       }
       sendJson(200, doc);
     });
@@ -236,23 +372,38 @@ void setup() {
       sendJson(200,res);
     });
 
+    // Body: {"zone": 1..ZONE_COUNT (opcional, 1 por defecto), "duration": 0..MAX_MANUAL_MIN}
     server.on("/on", HTTP_POST, []() {
       if (!checkToken()) return;
       JsonDocument doc;
-      if (server.hasArg("plain")) deserializeJson(doc, server.arg("plain"));
-      int dur = doc["duration"]|0;
-      if (riegoActivo) {
-        JsonDocument r; r["ok"]=false; r["valve"]=true; r["message"]="Ya encendido"; sendJson(200,r); return;
+      if (server.hasArg("plain") && deserializeJson(doc, server.arg("plain"))) { sendError(400,"JSON invalido"); return; }
+      int zone = doc["zone"]|1;
+      int dur  = doc["duration"]|0;
+      if (!validZone(zone)) { sendError(400,"Zona invalida"); return; }
+      if (dur < 0 || dur > MAX_MANUAL_MIN) { sendError(400,"Duracion invalida"); return; }
+      uint8_t z = zone - 1;
+      if (zones[z].active) {
+        JsonDocument r; r["ok"]=false; r["zone"]=zone; r["valve"]=true; r["message"]="Ya encendido"; sendJson(200,r); return;
       }
-      encenderRiego(true);
-      if (dur > 0) riegoStop = rtc.now() + TimeSpan(0,0,dur,0);
-      JsonDocument r; r["ok"]=true; r["valve"]=true; r["duration"]=dur; sendJson(200,r);
+      encenderZona(z, true, dur);
+      JsonDocument r; r["ok"]=true; r["zone"]=zone; r["valve"]=true; r["duration"]=dur; sendJson(200,r);
     });
 
+    // Body: {"zone": 1..ZONE_COUNT}. Sin zona apaga todas (compatibilidad v1).
     server.on("/off", HTTP_POST, []() {
       if (!checkToken()) return;
-      apagarRiego(); lastFiredMin=lastFiredIdx=-1;
-      JsonDocument r; r["ok"]=true; r["valve"]=false; sendJson(200,r);
+      JsonDocument doc;
+      if (server.hasArg("plain") && deserializeJson(doc, server.arg("plain"))) { sendError(400,"JSON invalido"); return; }
+      JsonDocument r; r["ok"]=true; r["valve"]=false;
+      if (doc["zone"].is<int>()) {
+        int zone = doc["zone"];
+        if (!validZone(zone)) { sendError(400,"Zona invalida"); return; }
+        apagarZona(zone - 1, true);
+        r["zone"] = zone;
+      } else {
+        apagarTodas(true);
+      }
+      sendJson(200,r);
     });
 
     server.on("/schedules", HTTP_GET, []() {
@@ -264,10 +415,13 @@ void setup() {
         s["id"]=schedules[i].id; s["active"]=schedules[i].active;
         s["days"]=schedules[i].days; s["startHour"]=schedules[i].startHour;
         s["startMinute"]=schedules[i].startMinute; s["duration"]=schedules[i].durationMin;
+        s["zone"]=schedules[i].zone;
       }
       doc["count"]=scheduleCount; sendJson(200,doc);
     });
 
+    // Reemplaza todas las programaciones. Se valida todo antes de guardar:
+    // la app no es frontera de confianza.
     server.on("/schedules", HTTP_POST, []() {
       if (!checkToken()) return;
       if (!server.hasArg("plain")) { sendError(400,"Body vacio"); return; }
@@ -275,13 +429,19 @@ void setup() {
       if (deserializeJson(doc,server.arg("plain"))) { sendError(400,"JSON invalido"); return; }
       JsonArray arr = doc["schedules"].as<JsonArray>();
       if (arr.isNull()) { sendError(400,"schedules requerido"); return; }
+      if (arr.size() > MAX_SCHEDULES) { sendError(400,"Maximo 10 programaciones"); return; }
+      for (JsonObject s:arr) {
+        int zone = s["zone"]|1, hour = s["startHour"]|0, minute = s["startMinute"]|0, dur = s["duration"]|20;
+        if (!validZone(zone)) { sendError(400,"Zona invalida"); return; }
+        if (hour < 0 || hour > 23 || minute < 0 || minute > 59) { sendError(400,"Hora invalida"); return; }
+        if (dur < 1 || dur > MAX_SCHEDULE_MIN) { sendError(400,"Duracion invalida"); return; }
+      }
       scheduleCount=0;
       for (JsonObject s:arr) {
-        if (scheduleCount>=MAX_SCHEDULES) break;
         Schedule& sc=schedules[scheduleCount];
         sc.active=s["active"]|false; sc.days=s["days"]|127;
         sc.startHour=s["startHour"]|0; sc.startMinute=s["startMinute"]|0;
-        sc.durationMin=s["duration"]|20;
+        sc.durationMin=s["duration"]|20; sc.zone=s["zone"]|1;
         strlcpy(sc.id,s["id"]|"",sizeof(sc.id)); scheduleCount++;
       }
       saveSchedules();
@@ -303,15 +463,21 @@ void setup() {
       sendError(404,"No encontrada");
     });
 
+    // Solo una programación activa POR ZONA: activar una desactiva las demás de su zona.
     server.on("/schedules/active", HTTP_POST, []() {
       if (!checkToken()) return;
       if (!server.hasArg("plain")) { sendError(400,"Body vacio"); return; }
       JsonDocument doc; deserializeJson(doc,server.arg("plain"));
       const char* id=doc["id"]|""; bool active=doc["active"]|false;
-      for (int i=0;i<scheduleCount;i++) schedules[i].active=false;
-      for (int i=0;i<scheduleCount;i++) { if (strcmp(schedules[i].id,id)==0) { schedules[i].active=active; break; } }
+      int target=-1;
+      for (int i=0;i<scheduleCount;i++) if (strcmp(schedules[i].id,id)==0) { target=i; break; }
+      if (target<0) { sendError(404,"No encontrada"); return; }
+      if (active) {
+        for (int i=0;i<scheduleCount;i++) if (schedules[i].zone==schedules[target].zone) schedules[i].active=false;
+      }
+      schedules[target].active=active;
       saveSchedules();
-      JsonDocument r; r["ok"]=true; sendJson(200,r);
+      JsonDocument r; r["ok"]=true; r["zone"]=schedules[target].zone; sendJson(200,r);
     });
 
     server.on("/reset", HTTP_POST, []() {
@@ -321,7 +487,7 @@ void setup() {
       if (!timingSafeCompare(String(doc["pin"]|""), getResetPin())) {
         logSecure("reset_bad_pin"); sendError(403,"PIN incorrecto"); return;
       }
-      apagarRiego();
+      apagarTodas(false);
       prefs.begin("aqua-auth",false);  prefs.clear(); prefs.end();
       prefs.begin("aqua-sched",false); prefs.clear(); prefs.end();
       prefs.begin("aqua-wifi",false);  prefs.clear(); prefs.end();
@@ -342,7 +508,7 @@ void setup() {
         sendError(403,"PIN incorrecto"); return;
       }
       pinAttempts=0; pinLockedUntil=0;
-      apagarRiego();
+      apagarTodas(false);
       prefs.begin("aqua-auth",false);  prefs.clear(); prefs.end();
       prefs.begin("aqua-sched",false); prefs.clear(); prefs.end();
       // NO borrar WiFi — solo desvincular token
@@ -363,6 +529,8 @@ void setup() {
     server.onNotFound([]() { sendError(404,"No encontrado"); });
     server.begin();
     Serial.println(F("[HTTP] Servidor en puerto 80"));
+    Serial.printf("[Zonas] %d zonas configuradas\n", ZONE_COUNT);
+    if (strlen(EVENT_URL) == 0) Serial.println(F("[Avisos] EVENT_URL vacia: notificaciones desactivadas"));
     blinkLED(5);
     if (authToken.isEmpty()) Serial.println(F("[Sec] Sin vincular. Esperando /pair."));
     else logSecure("boot_ok");
@@ -452,7 +620,12 @@ start_setup:
 void loop() {
   if (currentMode==MODE_SETUP) dnsServer.processNextRequest();
   server.handleClient();
-  if (currentMode==MODE_NORMAL) { checkStop(); checkSchedules(); }
+  if (currentMode==MODE_NORMAL) {
+    checkStop();
+    checkSchedules();
+    checkFaults();
+    processEvents();
+  }
   static unsigned long lastBlink=0;
   if (millis()-lastBlink > (currentMode==MODE_SETUP?500:3000)) { lastBlink=millis(); blinkLED(1); }
   delay(10);
@@ -542,61 +715,185 @@ String loadSecure(const char* ns, const char* key) {
 }
 
 void saveSchedules() {
-  prefs.begin("aqua-sched",false); prefs.putInt("count",scheduleCount);
+  prefs.begin("aqua-sched",false);
+  prefs.putInt("ver",SCHED_VERSION);
+  prefs.putInt("count",scheduleCount);
   for (int i=0;i<scheduleCount;i++) { char k[8]; snprintf(k,sizeof(k),"s%d",i); prefs.putBytes(k,&schedules[i],sizeof(Schedule)); }
   prefs.end();
 }
 
 void loadSchedules() {
-  prefs.begin("aqua-sched",true); scheduleCount=prefs.getInt("count",0);
-  for (int i=0;i<scheduleCount;i++) { char k[8]; snprintf(k,sizeof(k),"s%d",i); prefs.getBytes(k,&schedules[i],sizeof(Schedule)); }
+  prefs.begin("aqua-sched",true);
+  int ver=prefs.getInt("ver",1);
+  scheduleCount=constrain(prefs.getInt("count",0),0,MAX_SCHEDULES);
+  for (int i=0;i<scheduleCount;i++) {
+    char k[8]; snprintf(k,sizeof(k),"s%d",i);
+    if (ver>=SCHED_VERSION) {
+      prefs.getBytes(k,&schedules[i],sizeof(Schedule));
+    } else {
+      // Migración v3.1 → v3.2: las programaciones existentes pasan a la zona 1
+      ScheduleV1 old; prefs.getBytes(k,&old,sizeof(ScheduleV1));
+      Schedule& s=schedules[i];
+      s.active=old.active; s.days=old.days; s.startHour=old.startHour;
+      s.startMinute=old.startMinute; s.durationMin=old.durationMin;
+      memcpy(s.id,old.id,sizeof(s.id)); s.zone=1;
+    }
+    if (!validZone(schedules[i].zone)) schedules[i].zone=1;
+  }
   prefs.end();
+  if (ver<SCHED_VERSION && scheduleCount>0) {
+    saveSchedules();
+    Serial.println(F("[Flash] Programaciones migradas al formato multizona"));
+  }
   Serial.printf("[Flash] %d programaciones cargadas\n",scheduleCount);
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-//  CONTROL VÁLVULA + SCHEDULER
+//  CONTROL DE ZONAS + SCHEDULER
 // ══════════════════════════════════════════════════════════════════════════════
-void encenderRiego(bool manual) {
-  riegoActivo=true; manualOverride=manual; digitalWrite(PIN_VALVULA,HIGH);
-  if (!PRODUCTION_MODE) Serial.println(F("[Valve] ON"));
+bool validZone(int zone) { return zone>=1 && zone<=ZONE_COUNT; }
+
+bool anyZoneActive() {
+  for (int z=0;z<ZONE_COUNT;z++) if (zones[z].active) return true;
+  return false;
 }
 
-void apagarRiego() {
-  riegoActivo=false; manualOverride=false; digitalWrite(PIN_VALVULA,LOW);
-  if (!PRODUCTION_MODE) Serial.println(F("[Valve] OFF"));
+// z: índice 0-based. minutes = 0 → sin apagado automático.
+void encenderZona(uint8_t z, bool manual, uint16_t minutes) {
+  ZoneState& s=zones[z];
+  s.active=true; s.manual=manual; s.fault=false;
+  s.timed=minutes>0;
+  s.startedAt=rtc.now();
+  if (s.timed) s.stopAt=s.startedAt+TimeSpan(0,0,minutes,0);
+  s.onSinceMs=millis();
+  digitalWrite(ZONE_PINS[z],HIGH);
+  if (!PRODUCTION_MODE) Serial.printf("[Zona %d] ON (pin %d)\n",z+1,ZONE_PINS[z]);
+  queueEvent(EV_START,z+1,manual,minutes);
 }
 
+void apagarZona(uint8_t z, bool notify) {
+  ZoneState& s=zones[z];
+  if (!s.active) return;
+  uint16_t ran=(uint16_t)((rtc.now()-s.startedAt).totalseconds()/60);
+  bool wasManual=s.manual;
+  s.active=false; s.manual=false; s.timed=false;
+  digitalWrite(ZONE_PINS[z],LOW);
+  if (!PRODUCTION_MODE) Serial.printf("[Zona %d] OFF\n",z+1);
+  if (notify) queueEvent(EV_END,z+1,wasManual,ran);
+}
+
+void apagarTodas(bool notify) {
+  for (int z=0;z<ZONE_COUNT;z++) apagarZona(z,notify);
+}
+
+// Apaga cada zona cuando se cumple su duración (también riegos manuales con duración)
 void checkStop() {
-  if (!riegoActivo||manualOverride) return;
-  if (rtc.now()>=riegoStop) { apagarRiego(); lastFiredMin=lastFiredIdx=-1; }
+  DateTime now=rtc.now();
+  for (int z=0;z<ZONE_COUNT;z++) {
+    ZoneState& s=zones[z];
+    if (!s.active||!s.timed) continue;
+    if (now>=s.stopAt) apagarZona(z,true);
+  }
 }
 
 void checkSchedules() {
-  if (riegoActivo) return;
   DateTime now=rtc.now();
   int currentMin=now.hour()*60+now.minute();
   int dayBit=getDayBit(now.dayOfTheWeek());
+  int32_t today=now.year()*10000L+now.month()*100+now.day();
   for (int i=0;i<scheduleCount;i++) {
     Schedule& s=schedules[i];
-    if (!s.active) continue;
+    if (!s.active||!validZone(s.zone)) continue;
+    ZoneState& zs=zones[s.zone-1];
+    if (zs.active) continue;                  // la zona ya está regando
     if (!(s.days&(1<<dayBit))) continue;
     int schedMin=s.startHour*60+s.startMinute;
     if (abs(currentMin-schedMin)>1) continue;
-    if (lastFiredIdx==i&&lastFiredMin==schedMin) continue;
-    lastFiredIdx=i; lastFiredMin=schedMin;
-    riegoStop=rtc.now()+TimeSpan(0,0,s.durationMin,0);
-    encenderRiego(false);
-    Serial.printf("[Scheduler] Programacion #%d disparada\n",i);
-    break;
+    if (zs.lastFiredIdx==i&&zs.lastFiredMin==schedMin&&zs.lastFiredDate==today) continue;
+    zs.lastFiredIdx=i; zs.lastFiredMin=schedMin; zs.lastFiredDate=today;
+    encenderZona(s.zone-1,false,s.durationMin);
+    Serial.printf("[Scheduler] Programacion #%d disparada en zona %d\n",i,s.zone);
+  }
+}
+
+// Con sensor de retroalimentación: si la válvula no responde, se apaga la zona
+// y se avisa al usuario (falla).
+void checkFaults() {
+  if (!FAULT_DETECTION) return;
+  for (int z=0;z<ZONE_COUNT;z++) {
+    ZoneState& s=zones[z];
+    if (!s.active||millis()-s.onSinceMs<FAULT_CHECK_MS) continue;
+    if (digitalRead(ZONE_SENSE_PINS[z])==LOW) {
+      bool wasManual=s.manual;
+      apagarZona(z,false);
+      s.fault=true;
+      logSecure("valve_fault");
+      queueEvent(EV_FAIL,z+1,wasManual,0);
+    }
   }
 }
 
 int getDayBit(int dow) { return (dow==0)?6:(dow-1); }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  AVISOS → Cloud Function deviceEvent (notificaciones push)
+// ══════════════════════════════════════════════════════════════════════════════
+void queueEvent(uint8_t type, uint8_t zone, bool manual, uint16_t minutes) {
+  if (strlen(EVENT_URL)==0||authToken.isEmpty()) return;
+  if (eventCount==EVENT_QUEUE_SIZE) {             // cola llena: se descarta el más viejo
+    eventHead=(eventHead+1)%EVENT_QUEUE_SIZE; eventCount--;
+  }
+  int idx=(eventHead+eventCount)%EVENT_QUEUE_SIZE;
+  eventQueue[idx]={type,zone,manual,minutes,0,0};
+  eventCount++;
+}
+
+// Envía un aviso por iteración del loop para no bloquear el servidor HTTP.
+void processEvents() {
+  if (eventCount==0||WiFi.status()!=WL_CONNECTED) return;
+  PendingEvent& e=eventQueue[eventHead];
+  if (millis()<e.notBefore) return;
+  bool sent=postEvent(e);
+  if (sent||++e.attempts>=EVENT_MAX_ATTEMPTS) {
+    if (!sent) logSecure("event_dropped");
+    eventHead=(eventHead+1)%EVENT_QUEUE_SIZE; eventCount--;
+  } else {
+    e.notBefore=millis()+EVENT_RETRY_MS;
+  }
+}
+
+bool postEvent(const PendingEvent& e) {
+  static const char* TYPES[]={"start","end","fail"};
+  WiFiClientSecure client;
+  client.setCACert(GOOGLE_ROOT_CAS);
+  client.setTimeout(8);
+  HTTPClient http;
+  if (!http.begin(client,EVENT_URL)) return false;
+  http.setTimeout(8000);
+  http.addHeader("Content-Type","application/json");
+  http.addHeader("Authorization","Bearer "+authToken);
+
+  JsonDocument d;
+  d["uid"]=linkedUID; d["device"]=getDeviceShortId();
+  d["type"]=TYPES[e.type]; d["zone"]=e.zone;
+  d["source"]=e.manual?"manual":"schedule";
+  if (e.minutes>0) d["minutes"]=e.minutes;
+  String body; serializeJson(d,body);
+
+  int code=http.POST(body);
+  http.end();
+  if (!PRODUCTION_MODE) Serial.printf("[Avisos] %s zona %d -> HTTP %d\n",TYPES[e.type],e.zone,code);
+  // 4xx = petición rechazada (token o datos): reintentar no sirve
+  return (code>=200&&code<300)||(code>=400&&code<500);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  UTILIDADES
 // ══════════════════════════════════════════════════════════════════════════════
+String formatTime(const DateTime& t) {
+  char b[6]; snprintf(b,sizeof(b),"%02d:%02d",t.hour(),t.minute()); return String(b);
+}
+
 void sendJson(int code, JsonDocument& doc) {
   server.sendHeader("Access-Control-Allow-Origin","*");
   server.sendHeader("Access-Control-Allow-Headers","Authorization, Content-Type");

@@ -89,9 +89,42 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  # Reglas de seguridad de Firestore (por usuario, zona y token FCM) probadas
+  # contra el emulador, y pruebas unitarias de la Cloud Function de avisos.
+  firestore-rules:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: firebase
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Set up Java (emulador de Firestore)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Pruebas de la Cloud Function
+        working-directory: firebase/functions
+        run: |
+          npm install --no-audit --no-fund
+          npm test
+
+      - name: Pruebas de reglas de Firestore (emulador)
+        run: |
+          npm install --no-audit --no-fund
+          npm run test:rules
+
   # Alerta al canal de Discord del equipo si cualquier etapa falla.
   notify-failure:
-    needs: [build-and-test, sonarqube]
+    needs: [build-and-test, sonarqube, firestore-rules]
     if: ${{ failure() }}
     uses: ./.github/workflows/notify-discord.yml
     with:

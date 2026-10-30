@@ -28,6 +28,9 @@ El validador puro (`app/lib/utils/irrigation_validator.dart`), su prueba
 
 ## Cómo construir y ejecutar
 
+¿Primera vez en el proyecto? Sigue la [guía para colaboradores](docs/guia-colaboradores.md)
+(instalación, configuración de Git y flujo de ramas).
+
 `google-services.json` **no se versiona** (el repo es público). Cópialo desde tu
 proyecto de Firebase a `app/android/app/google-services.json` antes de compilar.
 
@@ -40,8 +43,8 @@ flutter run
 
 ## Avances por sprint
 
-Cada semana se sincronizan los avances desde el proyecto principal y se documentan
-en `docs/sprints/`. Ver el flujo completo en [`docs/sprints/README.md`](docs/sprints/README.md).
+Desde el Sprint 5 el equipo trabaja directo en este repo, cada quien en su rama, y
+cada sprint se documenta en `docs/sprints/`. Ver el flujo completo en [`docs/sprints/README.md`](docs/sprints/README.md).
 
 ## CI
 
