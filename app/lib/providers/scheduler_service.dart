@@ -1,20 +1,21 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../models/zone.dart';
 import 'irrigation_provider.dart';
 import 'schedule_provider.dart';
 
-/// Corre un timer cada 30 segundos y compara la hora actual
-/// con la programación activa. Si coincide hora y día, enciende
-/// el riego; cuando se cumple la duración, lo apaga.
+/// Corre un timer cada 30 segundos y compara la hora actual con la
+/// programación activa de cada zona. Si coincide hora y día, marca la zona
+/// como regando; cuando se cumple la duración, la apaga. El ESP32 ejecuta
+/// los horarios por su cuenta; esto mantiene la UI al día.
 class SchedulerService {
   Timer? _timer;
   IrrigationProvider? _irrigation;
   ScheduleProvider? _schedules;
 
-  // Guarda el ID del schedule que ya fue disparado en este minuto
-  // para no re-disparararlo cada tick.
-  String? _lastFiredId;
-  DateTime? _scheduledStop;
+  // Por zona: ID del schedule ya disparado y hora de apagado pendiente
+  final Map<int, String?>   _lastFiredId   = {};
+  final Map<int, DateTime?> _scheduledStop = {};
 
   void init(IrrigationProvider irrigation, ScheduleProvider schedules) {
     _irrigation = irrigation;
@@ -35,21 +36,30 @@ class SchedulerService {
     final schedules  = _schedules;
     if (irrigation == null || schedules == null) return;
 
-    final now    = DateTime.now();
-    final active = schedules.activeSchedule;
+    final now = DateTime.now();
+    for (final zoneId in Zones.ids) {
+      _checkZone(zoneId, now, irrigation, schedules);
+    }
+  }
+
+  void _checkZone(int zoneId, DateTime now, IrrigationProvider irrigation,
+      ScheduleProvider schedules) {
+    final zone   = irrigation.zone(zoneId);
+    final active = schedules.activeScheduleFor(zoneId);
+    final stop   = _scheduledStop[zoneId];
 
     // ── 1. Chequear si hay que APAGAR por duración cumplida ──────────────
-    if (_scheduledStop != null && now.isAfter(_scheduledStop!)) {
-      if (irrigation.isActive && !irrigation.manualOverride) {
-        irrigation.turnOff();
-        _scheduledStop = null;
-        _lastFiredId   = null;
-        debugPrint('[Scheduler] Riego terminado por duración.');
+    if (stop != null && now.isAfter(stop)) {
+      if (zone.isActive && !zone.manualOverride) {
+        irrigation.turnOff(zone: zoneId);
+        debugPrint('[Scheduler] Zona $zoneId: riego terminado por duración.');
       }
+      _scheduledStop[zoneId] = null;
+      _lastFiredId[zoneId]   = null;
       return;
     }
 
-    // ── 2. Sin programación activa → nada que hacer ───────────────────────
+    // ── 2. Sin programación activa en la zona → nada que hacer ────────────
     if (active == null) return;
 
     // ── 3. Verificar DÍA de la semana ────────────────────────────────────
@@ -71,23 +81,23 @@ class SchedulerService {
     if (!withinWindow) return;
 
     // ── 5. ¿Ya lo disparamos en este ciclo? ─────────────────────────────
-    if (_lastFiredId == active.id) return;
-    if (irrigation.isActive)       return; // manual override activo
+    if (_lastFiredId[zoneId] == active.id) return;
+    if (zone.isActive) return; // la zona ya está regando (p. ej. manual)
 
     // ── 6. ¡Disparar! ────────────────────────────────────────────────────
-    _lastFiredId   = active.id;
-    _scheduledStop = now.add(Duration(minutes: active.durationMinutes));
-    irrigation.activateFromSchedule();
+    _lastFiredId[zoneId]   = active.id;
+    _scheduledStop[zoneId] = now.add(Duration(minutes: active.durationMinutes));
+    irrigation.activateFromSchedule(zoneId);
     debugPrint(
-      '[Scheduler] Riego iniciado → ${active.name} '
-      'hasta ${_scheduledStop.toString().substring(11, 16)}',
+      '[Scheduler] Zona $zoneId: riego iniciado → ${active.name} '
+      'hasta ${_scheduledStop[zoneId].toString().substring(11, 16)}',
     );
   }
 
   /// Llama esto cuando el usuario edita/elimina una programación activa
   /// para cancelar cualquier stop pendiente.
   void invalidate() {
-    _scheduledStop = null;
-    _lastFiredId   = null;
+    _scheduledStop.clear();
+    _lastFiredId.clear();
   }
 }

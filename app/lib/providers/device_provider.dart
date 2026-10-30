@@ -43,16 +43,33 @@ class DeviceProvider extends ChangeNotifier {
   static const _port      = 80;
   static const _timeout   = Duration(seconds: 5);
 
+  StreamSubscription<User?>? _authSub;
+
   DeviceProvider() {
-    _init();
+    // Se carga el token cada vez que cambia la sesión: al abrir la app el
+    // usuario puede no haber iniciado sesión todavía.
+    _authSub = _auth.authStateChanges().listen(_onAuthChanged);
   }
 
-  Future<void> _init() async {
+  Future<void> _onAuthChanged(User? user) async {
+    if (user == null) {
+      _deviceToken = null;
+      _deviceIp    = null;
+      _deviceId    = null;
+      _setState(DeviceConnectionState.disconnected);
+      return;
+    }
     await _loadLocalToken();
     if (_deviceToken != null && _deviceIp != null) {
       // Intentar reconexión automática en segundo plano
       _tryConnect(_deviceIp!);
     }
+  }
+
+  @override
+  void dispose() {
+    _authSub?.cancel();
+    super.dispose();
   }
 
   // ══════════════════════════════════════════════════════════════════════════
@@ -370,8 +387,9 @@ class DeviceProvider extends ChangeNotifier {
     } catch (_) { return null; }
   }
 
-  Future<bool> turnOn({int durationMinutes = 0}) async {
-    final res = await _post('/on', {'duration': durationMinutes});
+  /// Enciende una zona (1..Zones.count).
+  Future<bool> turnOn({int zone = 1, int durationMinutes = 0}) async {
+    final res = await _post('/on', {'zone': zone, 'duration': durationMinutes});
     if (res != null && res['ok'] == true) {
       _valveOpen = true;
       notifyListeners();
@@ -380,8 +398,9 @@ class DeviceProvider extends ChangeNotifier {
     return false;
   }
 
-  Future<bool> turnOff() async {
-    final res = await _post('/off', {});
+  /// Apaga una zona; sin [zone] apaga todas.
+  Future<bool> turnOff({int? zone}) async {
+    final res = await _post('/off', zone == null ? {} : {'zone': zone});
     if (res != null && res['ok'] == true) {
       _valveOpen = false;
       notifyListeners();

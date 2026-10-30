@@ -1,18 +1,29 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
 import 'providers/auth_provider.dart';
 import 'providers/device_provider.dart';
 import 'providers/irrigation_provider.dart';
+import 'providers/notification_provider.dart';
 import 'providers/schedule_provider.dart';
 import 'providers/scheduler_service.dart';
+import 'providers/zone_provider.dart';
 import 'video_splash.dart';
+
+/// Avisos que llegan con la app en segundo plano o cerrada. Android muestra
+/// la notificación por sí mismo; aquí solo se inicializa Firebase.
+@pragma('vm:entry-point')
+Future<void> _onBackgroundMessage(RemoteMessage message) async {
+  await Firebase.initializeApp();
+}
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  FirebaseMessaging.onBackgroundMessage(_onBackgroundMessage);
 
   await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   SystemChrome.setSystemUIOverlayStyle(
@@ -40,6 +51,7 @@ class _AquaControlAppState extends State<AquaControlApp>
   final _irrigationProvider = IrrigationProvider();
   final _scheduleProvider   = ScheduleProvider();
   final _scheduler          = SchedulerService();
+  final _messengerKey       = GlobalKey<ScaffoldMessengerState>();
 
   @override
   void initState() {
@@ -53,6 +65,18 @@ class _AquaControlAppState extends State<AquaControlApp>
     // y empujar las programaciones al ESP32
     _scheduleProvider.addListener(_onSchedulesReady);
     _scheduleProvider.addListener(_syncSchedulesToDevice);
+
+    // Avisos con la app abierta: Android no los muestra solo, así que
+    // se presentan como un mensaje en pantalla.
+    FirebaseMessaging.onMessage.listen((message) {
+      final n = message.notification;
+      if (n == null) return;
+      final isFailure = message.data['type'] == 'fail';
+      _messengerKey.currentState?.showSnackBar(SnackBar(
+        backgroundColor: isFailure ? AppTheme.danger : AppTheme.bgCardLight,
+        content: Text('${n.title ?? 'AquaControl'}\n${n.body ?? ''}'),
+      ));
+    });
   }
 
   void _onSchedulesReady() {
@@ -74,6 +98,7 @@ class _AquaControlAppState extends State<AquaControlApp>
       'startHour':   s.startHour,
       'startMinute': s.startMinute,
       'duration':    s.durationMinutes,
+      'zone':        s.zone,
     }).toList();
 
     _deviceProvider.syncSchedules(list);
@@ -111,9 +136,12 @@ class _AquaControlAppState extends State<AquaControlApp>
         ChangeNotifierProvider.value(value: _deviceProvider),
         ChangeNotifierProvider.value(value: _irrigationProvider),
         ChangeNotifierProvider.value(value: _scheduleProvider),
+        ChangeNotifierProvider(create: (_) => ZoneProvider()),
+        ChangeNotifierProvider(create: (_) => NotificationProvider()),
       ],
       child: MaterialApp(
         title: 'AquaControl',
+        scaffoldMessengerKey: _messengerKey,
         theme: AppTheme.darkTheme,
         home: VideoSplash(),
         debugShowCheckedModeBanner: false,

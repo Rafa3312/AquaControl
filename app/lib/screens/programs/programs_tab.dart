@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../theme/app_theme.dart';
 import '../../models/schedule.dart';
 import '../../providers/schedule_provider.dart';
+import '../../providers/zone_provider.dart';
 import 'add_edit_schedule_screen.dart';
 
 class ProgramsTab extends StatelessWidget {
@@ -199,6 +200,13 @@ class _ScheduleCard extends StatelessWidget {
                               color: AppTheme.textPrimary,
                               fontSize: 15,
                               fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                          Text(
+                            context.watch<ZoneProvider>().nameOf(schedule.zone),
+                            style: const TextStyle(
+                              color: AppTheme.textSecondary,
+                              fontSize: 12,
                             ),
                           ),
                           if (active)

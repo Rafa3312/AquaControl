@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'zone.dart';
+
 class Schedule {
   final String id;
   String name;
@@ -7,6 +9,7 @@ class Schedule {
   int startHour;
   int startMinute;
   int durationMinutes;
+  int zone; // 1..Zones.count
   bool isActive;
   DateTime createdAt;
 
@@ -17,6 +20,7 @@ class Schedule {
     required this.startHour,
     required this.startMinute,
     required this.durationMinutes,
+    this.zone = 1,
     this.isActive = false,
     DateTime? createdAt,
   }) : createdAt = createdAt ?? DateTime.now();
@@ -50,20 +54,27 @@ class Schedule {
         'startHour': startHour,
         'startMinute': startMinute,
         'durationMinutes': durationMinutes,
+        'zone': zone,
         'isActive': isActive,
         'createdAt': createdAt.toIso8601String(),
       };
 
-  factory Schedule.fromJson(Map<String, dynamic> json) => Schedule(
-        id: json['id'],
-        name: json['name'],
-        days: List<int>.from(json['days']),
-        startHour: json['startHour'],
-        startMinute: json['startMinute'],
-        durationMinutes: json['durationMinutes'],
-        isActive: json['isActive'] ?? false,
-        createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
-      );
+  /// Las programaciones guardadas antes del Sprint 5 no tienen zona:
+  /// se asignan a la zona 1, igual que en el firmware.
+  factory Schedule.fromJson(Map<String, dynamic> json) {
+    final rawZone = json['zone'];
+    return Schedule(
+      id: json['id'],
+      name: json['name'],
+      days: List<int>.from(json['days']),
+      startHour: json['startHour'],
+      startMinute: json['startMinute'],
+      durationMinutes: json['durationMinutes'],
+      zone: rawZone is int && Zones.isValid(rawZone) ? rawZone : 1,
+      isActive: json['isActive'] ?? false,
+      createdAt: DateTime.tryParse(json['createdAt'] ?? '') ?? DateTime.now(),
+    );
+  }
 
   Schedule copyWith({
     String? name,
@@ -71,6 +82,7 @@ class Schedule {
     int? startHour,
     int? startMinute,
     int? durationMinutes,
+    int? zone,
     bool? isActive,
   }) =>
       Schedule(
@@ -80,6 +92,7 @@ class Schedule {
         startHour: startHour ?? this.startHour,
         startMinute: startMinute ?? this.startMinute,
         durationMinutes: durationMinutes ?? this.durationMinutes,
+        zone: zone ?? this.zone,
         isActive: isActive ?? this.isActive,
         createdAt: createdAt,
       );

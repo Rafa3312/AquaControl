@@ -3,6 +3,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import '../models/zone.dart';
+
 /// Error devuelto por el API REST del programador (ESP32) o por falta de
 /// conexión con él. [statusCode] es 0 cuando no hubo respuesta HTTP.
 class DeviceApiException implements Exception {
@@ -69,19 +71,23 @@ class DeviceApiClient {
         body: {'token': pairingToken, 'uid': uid}, authenticated: false);
   }
 
-  /// POST /on — enciende el riego. [durationMinutes] = 0 significa sin
-  /// apagado automático.
-  Future<Map<String, dynamic>> turnOn({int durationMinutes = 0}) {
+  /// POST /on — enciende el riego de una zona. [durationMinutes] = 0
+  /// significa sin apagado automático.
+  Future<Map<String, dynamic>> turnOn({int zone = 1, int durationMinutes = 0}) {
+    _checkZone(zone);
     if (durationMinutes < 0 || durationMinutes > maxManualMinutes) {
       throw RangeError.range(
           durationMinutes, 0, maxManualMinutes, 'durationMinutes');
     }
-    return _send('POST', '/on', body: {'duration': durationMinutes});
+    return _send('POST', '/on',
+        body: {'zone': zone, 'duration': durationMinutes});
   }
 
-  /// POST /off — apaga el riego.
-  Future<Map<String, dynamic>> turnOff() =>
-      _send('POST', '/off', body: const {});
+  /// POST /off — apaga una zona. Sin [zone] apaga todas.
+  Future<Map<String, dynamic>> turnOff({int? zone}) {
+    if (zone != null) _checkZone(zone);
+    return _send('POST', '/off', body: zone == null ? const {} : {'zone': zone});
+  }
 
   /// POST /schedules — reemplaza todas las programaciones del dispositivo.
   Future<Map<String, dynamic>> syncSchedules(
@@ -106,6 +112,12 @@ class DeviceApiClient {
       _send('POST', '/schedules/active', body: {'id': id, 'active': active});
 
   void close() => _client.close();
+
+  static void _checkZone(int zone) {
+    if (!Zones.isValid(zone)) {
+      throw RangeError.range(zone, 1, Zones.count, 'zone');
+    }
+  }
 
   Future<Map<String, dynamic>> _send(
     String method,
