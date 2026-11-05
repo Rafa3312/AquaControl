@@ -65,10 +65,11 @@ class ZoneProvider extends ChangeNotifier {
     if (uid == null) return 'No hay sesión activa';
 
     try {
+      // merge: el mismo documento guarda el riego inteligente de la zona
       await _firestore.doc('users/$uid/zones/$id').set({
         'name': name.trim(),
         'updatedAt': FieldValue.serverTimestamp(),
-      });
+      }, SetOptions(merge: true));
     } catch (e) {
       return 'No se pudo guardar el nombre. Revisa tu conexión.';
     }

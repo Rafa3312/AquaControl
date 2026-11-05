@@ -1,3 +1,5 @@
+import 'smart_irrigation.dart';
+
 /// Zonas de riego que controla el programador (una válvula por zona).
 class Zones {
   /// Debe coincidir con ZONE_COUNT del firmware.
@@ -30,6 +32,8 @@ class ZoneStatus {
   final bool manual;
   final bool fault;
   final String? stopAt;
+  final MoistureReading? moisture;  // firmware v3.3+ con sensor de humedad
+  final SmartRecord? lastSmart;     // última decisión del riego inteligente
 
   const ZoneStatus({
     required this.id,
@@ -37,6 +41,8 @@ class ZoneStatus {
     this.manual = false,
     this.fault = false,
     this.stopAt,
+    this.moisture,
+    this.lastSmart,
   });
 
   /// Lee el arreglo "zones" de /status. Si el firmware es anterior a la
@@ -58,6 +64,8 @@ class ZoneStatus {
           manual: item['manual'] == true,
           fault: item['fault'] == true,
           stopAt: item['stopAt'] as String?,
+          moisture: MoistureReading.fromJson(item['moisture']),
+          lastSmart: SmartRecord.fromJson(item['lastSmart']),
         );
       }
     } else {

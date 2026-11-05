@@ -425,6 +425,20 @@ class DeviceProvider extends ChangeNotifier {
     return res != null && res['ok'] == true;
   }
 
+  /// Configura el riego inteligente de una zona (firmware v3.3 o mayor).
+  Future<bool> setSmart({
+    required int zone,
+    required bool enabled,
+    required int threshold,
+  }) async {
+    final res = await _post('/smart', {
+      'zone': zone,
+      'enabled': enabled,
+      'threshold': threshold,
+    });
+    return res != null && res['ok'] == true;
+  }
+
   // ── HTTP helpers ──────────────────────────────────────────────────────────
 
   Map<String, String> get _headers => {

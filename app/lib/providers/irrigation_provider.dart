@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../models/smart_irrigation.dart';
 import '../models/zone.dart';
 import 'device_provider.dart';
 
@@ -14,6 +15,8 @@ class ZoneRuntime {
   bool fault = false;
   DateTime? startTime;
   String? stopAt;
+  MoistureReading? moisture;   // humedad del suelo (Sprint 6)
+  SmartRecord? lastSmart;      // última decisión del riego inteligente
 
   ZoneRuntime(this.id);
 
@@ -127,6 +130,15 @@ class IrrigationProvider extends ChangeNotifier {
       if (z.fault != zs.fault || z.stopAt != zs.stopAt) {
         z.fault  = zs.fault;
         z.stopAt = zs.stopAt;
+        changed = true;
+      }
+      final moistureChanged = z.moisture?.percent != zs.moisture?.percent ||
+          z.moisture?.valid != zs.moisture?.valid;
+      final smartChanged = z.lastSmart?.reason != zs.lastSmart?.reason ||
+          z.lastSmart?.at != zs.lastSmart?.at;
+      if (moistureChanged || smartChanged) {
+        z.moisture  = zs.moisture;
+        z.lastSmart = zs.lastSmart;
         changed = true;
       }
     }
