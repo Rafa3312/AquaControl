@@ -63,6 +63,8 @@ exports.deviceEvent = onRequest({ region: 'us-central1', maxInstances: 5 }, asyn
       zoneName,
       source: event.source,
       minutes: event.minutes,
+      moisture: event.moisture,
+      threshold: event.threshold,
       title: message.title,
       body: message.body,
       severity: message.severity,
@@ -79,7 +81,7 @@ exports.deviceEvent = onRequest({ region: 'us-central1', maxInstances: 5 }, asyn
           tokens,
           notification: { title: message.title, body: message.body },
           data: { type: event.type, zone: String(event.zone) },
-          android: { priority: event.type === 'fail' ? 'high' : 'normal' },
+          android: { priority: message.severity === 'error' ? 'high' : 'normal' },
         });
         sent = response.successCount;
 

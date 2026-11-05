@@ -2,7 +2,8 @@
 
 const crypto = require('node:crypto');
 
-const EVENT_TYPES = ['start', 'end', 'fail'];
+// skip, reduce y sensor: decisiones del riego inteligente (Sprint 6, HU-10)
+const EVENT_TYPES = ['start', 'end', 'fail', 'skip', 'reduce', 'sensor'];
 const SOURCES = ['manual', 'schedule'];
 const MAX_ZONES = 2;
 
@@ -33,7 +34,7 @@ function tokensEqual(received, stored) {
  */
 function validateEvent(body) {
   if (body === null || typeof body !== 'object') return { ok: false, error: 'Cuerpo inválido' };
-  const { uid, type, zone, source = 'schedule', minutes, device } = body;
+  const { uid, type, zone, source = 'schedule', minutes, device, moisture, threshold } = body;
 
   if (typeof uid !== 'string' || uid.length === 0 || uid.length > 128 || uid.includes('/')) {
     return { ok: false, error: 'uid inválido' };
@@ -47,8 +48,26 @@ function validateEvent(body) {
   if (device !== undefined && (typeof device !== 'string' || device.length > 16)) {
     return { ok: false, error: 'device inválido' };
   }
+  if (moisture !== undefined && (!Number.isInteger(moisture) || moisture < 0 || moisture > 100)) {
+    return { ok: false, error: 'moisture inválido' };
+  }
+  if (threshold !== undefined && (!Number.isInteger(threshold) || threshold < 10 || threshold > 90)) {
+    return { ok: false, error: 'threshold inválido' };
+  }
 
-  return { ok: true, event: { uid, type, zone, source, minutes: minutes ?? null, device: device ?? null } };
+  return {
+    ok: true,
+    event: {
+      uid,
+      type,
+      zone,
+      source,
+      minutes: minutes ?? null,
+      device: device ?? null,
+      moisture: moisture ?? null,
+      threshold: threshold ?? null,
+    },
+  };
 }
 
 /** Arma el título y el texto de la notificación que verá el usuario. */
@@ -66,6 +85,26 @@ function buildMessage(event, zoneName) {
       const body = event.minutes ? `La zona regó ${event.minutes} min.` : 'El riego terminó.';
       return { title: `Riego terminado · ${name}`, body, severity: 'info' };
     }
+    case 'skip':
+      return {
+        title: `Riego omitido · ${name}`,
+        body: `Humedad ${event.moisture}% (umbral ${event.threshold}%): omitido por humedad suficiente.`,
+        severity: 'info',
+      };
+    case 'reduce': {
+      const extra = event.minutes ? ` (${event.minutes} min)` : '';
+      return {
+        title: `Riego reducido · ${name}`,
+        body: `Humedad ${event.moisture}% (umbral ${event.threshold}%): se regó la mitad${extra}.`,
+        severity: 'info',
+      };
+    }
+    case 'sensor':
+      return {
+        title: `Sensor de humedad sin lectura · ${name}`,
+        body: 'Se regó según lo programado. Revisa la conexión del sensor.',
+        severity: 'error',
+      };
     case 'fail':
     default:
       return {
