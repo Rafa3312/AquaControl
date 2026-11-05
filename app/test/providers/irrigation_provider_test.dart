@@ -174,6 +174,30 @@ void main() {
     expect(irrigation.zone(2).fault, isFalse);
   });
 
+  test('syncStatus guarda la humedad y la última decisión de cada zona', () async {
+    // Arrange
+    irrigation.setDeviceProvider(device);
+    device.status = {
+      'zones': [
+        {
+          'id': 1,
+          'valve': false,
+          'moisture': {'valid': true, 'percent': 50},
+          'lastSmart': {'reason': 'near', 'percent': 50, 'at': '06:00'},
+        },
+        {'id': 2, 'valve': false},
+      ],
+    };
+
+    // Act
+    await irrigation.syncStatus();
+
+    // Assert
+    expect(irrigation.zone(1).moisture?.percent, 50);
+    expect(irrigation.zone(1).lastSmart?.message, 'Reducido a la mitad por humedad');
+    expect(irrigation.zone(2).moisture, isNull);
+  });
+
   test('al reconectarse el dispositivo se sincroniza el estado', () async {
     // Arrange
     irrigation.setDeviceProvider(device);
