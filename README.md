@@ -51,6 +51,14 @@ build de APK debug (este último solo si existe el secreto `GOOGLE_SERVICES_JSON
 **Settings > Secrets and variables > Actions**, con el contenido de
 `google-services.json`).
 
+### Notificaciones de fallas
+
+Si cualquier job de `CI` o de `Commit & PR title rules` falla, el job
+`notify-failure` llama a `.github/workflows/notify-discord.yml`, que publica una
+alerta en el canal de Discord del equipo (workflow, jobs con falla, rama, commit,
+autor y enlaces a la ejecución y al PR). Requiere el secreto
+`DISCORD_WEBHOOK_URL` (Discord → Ajustes del canal → Integraciones → Webhooks).
+
 ## Reglas de CI/merge (automatizadas, no solo documentadas)
 
 - `.github/workflows/commitlint.yml`: valida automáticamente que los commits y el título del PR sigan Conventional Commits (job `commitlint` + `pr-title`).
