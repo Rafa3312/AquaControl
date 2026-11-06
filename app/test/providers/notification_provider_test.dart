@@ -114,6 +114,28 @@ void main() {
     provider.dispose();
   });
 
+  test('muestra los avisos del riego inteligente y resalta la falla del sensor', () async {
+    // Arrange
+    final notifs = firestore.collection('users/u1/notifications');
+    await notifs.doc('s').set({'type': 'skip', 'zone': 1, 'createdAt': Timestamp.fromDate(DateTime(2026, 10, 5, 6))});
+    await notifs.doc('r').set({'type': 'reduce', 'zone': 2, 'createdAt': Timestamp.fromDate(DateTime(2026, 10, 5, 7))});
+    await notifs.doc('f').set({'type': 'sensor', 'zone': 1, 'createdAt': Timestamp.fromDate(DateTime(2026, 10, 5, 8))});
+    final provider = build();
+
+    // Act
+    session.add('u1');
+    await settle();
+
+    // Assert
+    expect(provider.items.map((n) => n.title), [
+      'Sensor de humedad sin lectura · Zona 1',
+      'Riego reducido · Zona 2',
+      'Riego omitido · Zona 1',
+    ]);
+    expect(provider.failureCount, 1);
+    provider.dispose();
+  });
+
   test('enable guarda primero el consentimiento y luego el token', () async {
     // Arrange
     final provider = build();

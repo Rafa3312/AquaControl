@@ -55,3 +55,31 @@ test('extrae el token Bearer del encabezado', () => {
   assert.equal(bearerToken('Basic abc'), null);
   assert.equal(bearerToken(undefined), null);
 });
+
+// ── Riego inteligente (Sprint 6) ──────────────────────────────────────────────
+test('acepta los avisos del riego inteligente con humedad y umbral', () => {
+  const result = validateEvent({ ...VALID, type: 'skip', minutes: undefined, moisture: 68, threshold: 60 });
+  assert.equal(result.ok, true);
+  assert.equal(result.event.moisture, 68);
+  assert.equal(result.event.threshold, 60);
+});
+
+test('rechaza humedad o umbral fuera de rango', () => {
+  assert.equal(validateEvent({ ...VALID, type: 'skip', moisture: 101, threshold: 60 }).ok, false);
+  assert.equal(validateEvent({ ...VALID, type: 'skip', moisture: 50, threshold: 9 }).ok, false);
+  assert.equal(validateEvent({ ...VALID, type: 'skip', moisture: 50, threshold: 91 }).ok, false);
+});
+
+test('el riego omitido explica el motivo con la humedad y el umbral', () => {
+  const message = buildMessage({ ...VALID, type: 'skip', moisture: 68, threshold: 60 }, 'Jardín');
+  assert.equal(message.title, 'Riego omitido · Jardín');
+  assert.match(message.body, /68%.*60%.*humedad suficiente/);
+});
+
+test('el riego reducido indica los minutos y la falla del sensor es una alerta', () => {
+  const reduced = buildMessage({ ...VALID, type: 'reduce', moisture: 50, threshold: 60, minutes: 5 }, null);
+  assert.match(reduced.body, /la mitad \(5 min\)/);
+  const sensor = buildMessage({ ...VALID, type: 'sensor' }, null);
+  assert.equal(sensor.title, 'Sensor de humedad sin lectura · Zona 1');
+  assert.equal(sensor.severity, 'error');
+});

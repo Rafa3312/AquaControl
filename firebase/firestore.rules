@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Reglas de seguridad de AquaControl (Sprint 5).
+// Reglas de seguridad de AquaControl (Sprints 5 y 6).
 // Principio: cada usuario solo accede a sus propios datos (mínimo privilegio)
 // y la app no es frontera de confianza: aquí se valida el formato de lo que escribe.
 service cloud.firestore {
@@ -35,15 +35,24 @@ service cloud.firestore {
         && request.resource.data.notificationsEnabled is bool;
       allow delete: if isOwner(uid);
 
-      // Nombre de cada zona de riego: solo existen las zonas 1 y 2
+      // Cada zona de riego (solo existen la 1 y la 2): su nombre (Sprint 5) y
+      // su riego inteligente (Sprint 6). El umbral usa el mismo rango que la
+      // app y el firmware: 10% a 90%.
       match /zones/{zoneId} {
         allow read, delete: if isOwner(uid);
         allow create, update: if isOwner(uid)
           && zoneId in ['1', '2']
-          && request.resource.data.keys().hasOnly(['name', 'updatedAt'])
-          && request.resource.data.name is string
-          && request.resource.data.name.size() > 0
-          && request.resource.data.name.size() <= 30;
+          && request.resource.data.keys().hasOnly(['name', 'updatedAt', 'smartEnabled', 'threshold'])
+          && (!('name' in request.resource.data)
+              || (request.resource.data.name is string
+                  && request.resource.data.name.size() > 0
+                  && request.resource.data.name.size() <= 30))
+          && (!('smartEnabled' in request.resource.data)
+              || request.resource.data.smartEnabled is bool)
+          && (!('threshold' in request.resource.data)
+              || (request.resource.data.threshold is int
+                  && request.resource.data.threshold >= 10
+                  && request.resource.data.threshold <= 90));
       }
 
       // Tokens FCM: solo con consentimiento previo del usuario

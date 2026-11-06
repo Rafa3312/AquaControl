@@ -103,6 +103,21 @@ void main() {
     expect(prefs.getString('zoneNames_u1'), contains('Pasto'));
   });
 
+  test('renombrar una zona conserva su riego inteligente (Sprint 6)', () async {
+    // Arrange
+    await firestore.doc('users/u1/zones/1').set({'smartEnabled': true, 'threshold': 60});
+    session.add('u1');
+    await settle();
+
+    // Act
+    await zones.rename(1, 'Frente');
+
+    // Assert
+    final doc = await firestore.doc('users/u1/zones/1').get();
+    expect(doc.data()?['name'], 'Frente');
+    expect(doc.data()?['threshold'], 60);
+  });
+
   test('al cerrar sesión se vuelve a los nombres por defecto', () async {
     // Arrange
     await firestore.doc('users/u1/zones/1').set({'name': 'Frente'});

@@ -83,6 +83,26 @@ test('otro usuario no puede renombrar zonas ajenas', async () => {
   await assertFails(setDoc(doc(as('beto'), 'users/alicia/zones/1'), { name: 'Mío' }));
 });
 
+// ── Riego inteligente (Sprint 6) ──────────────────────────────────────────────
+test('el dueño guarda el riego inteligente de una zona (umbral 10% a 90%)', async () => {
+  const db = as('alicia');
+  await assertSucceeds(setDoc(doc(db, 'users/alicia/zones/1'), { smartEnabled: true, threshold: 60 }));
+  await assertSucceeds(setDoc(doc(db, 'users/alicia/zones/2'), { name: 'Huerto', smartEnabled: false, threshold: 10 }));
+  await assertSucceeds(setDoc(doc(db, 'users/alicia/zones/2'), { smartEnabled: true, threshold: 90 }));
+});
+
+test('se rechaza un umbral fuera de rango o que no es entero', async () => {
+  const db = as('alicia');
+  await assertFails(setDoc(doc(db, 'users/alicia/zones/1'), { smartEnabled: true, threshold: 9 }));
+  await assertFails(setDoc(doc(db, 'users/alicia/zones/1'), { smartEnabled: true, threshold: 91 }));
+  await assertFails(setDoc(doc(db, 'users/alicia/zones/1'), { smartEnabled: true, threshold: '60' }));
+  await assertFails(setDoc(doc(db, 'users/alicia/zones/1'), { smartEnabled: 'sí', threshold: 60 }));
+});
+
+test('otro usuario no puede cambiar el riego inteligente ajeno', async () => {
+  await assertFails(setDoc(doc(as('beto'), 'users/alicia/zones/1'), { smartEnabled: false, threshold: 90 }));
+});
+
 // ── Consentimiento y tokens FCM ───────────────────────────────────────────────
 test('sin consentimiento no se puede registrar un token FCM', async () => {
   await assertFails(setDoc(doc(as('alicia'), 'users/alicia/fcmTokens/tkn-1'), { platform: 'android' }));

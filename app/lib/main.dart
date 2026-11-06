@@ -10,6 +10,7 @@ import 'providers/irrigation_provider.dart';
 import 'providers/notification_provider.dart';
 import 'providers/schedule_provider.dart';
 import 'providers/scheduler_service.dart';
+import 'providers/smart_irrigation_provider.dart';
 import 'providers/zone_provider.dart';
 import 'video_splash.dart';
 
@@ -51,6 +52,7 @@ class _AquaControlAppState extends State<AquaControlApp>
   final _irrigationProvider = IrrigationProvider();
   final _scheduleProvider   = ScheduleProvider();
   final _scheduler          = SchedulerService();
+  final _smartProvider      = SmartIrrigationProvider();
   final _messengerKey       = GlobalKey<ScaffoldMessengerState>();
 
   @override
@@ -60,6 +62,7 @@ class _AquaControlAppState extends State<AquaControlApp>
 
     // Conectar IrrigationProvider con DeviceProvider para que envíe HTTP
     _irrigationProvider.setDeviceProvider(_deviceProvider);
+    _smartProvider.setDeviceProvider(_deviceProvider);
 
     // Cuando ScheduleProvider termine de cargar, arrancar scheduler
     // y empujar las programaciones al ESP32
@@ -71,7 +74,7 @@ class _AquaControlAppState extends State<AquaControlApp>
     FirebaseMessaging.onMessage.listen((message) {
       final n = message.notification;
       if (n == null) return;
-      final isFailure = message.data['type'] == 'fail';
+      final isFailure = const ['fail', 'sensor'].contains(message.data['type']);
       _messengerKey.currentState?.showSnackBar(SnackBar(
         backgroundColor: isFailure ? AppTheme.danger : AppTheme.bgCardLight,
         content: Text('${n.title ?? 'AquaControl'}\n${n.body ?? ''}'),
@@ -138,6 +141,7 @@ class _AquaControlAppState extends State<AquaControlApp>
         ChangeNotifierProvider.value(value: _scheduleProvider),
         ChangeNotifierProvider(create: (_) => ZoneProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider.value(value: _smartProvider),
       ],
       child: MaterialApp(
         title: 'AquaControl',

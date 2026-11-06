@@ -1,4 +1,5 @@
 import 'package:flutter_test/flutter_test.dart';
+import 'package:irrigation_app/models/smart_irrigation.dart';
 import 'package:irrigation_app/models/zone.dart';
 
 /// Pruebas del modelo de zonas (Sprint 5, HU-7) con patrón AAA.
@@ -66,6 +67,59 @@ void main() {
       expect(Zones.validateName('Jardín frontal'), isNull);
       expect(Zones.validateName('   '), isNotNull);
       expect(Zones.validateName(largo), isNotNull);
+    });
+  });
+
+  group('Humedad en /status (Sprint 6)', () {
+    test('lee la humedad y la última decisión del riego inteligente', () {
+      // Arrange
+      final status = {
+        'zones': [
+          {
+            'id': 1,
+            'valve': false,
+            'moisture': {'valid': true, 'raw': 1800, 'percent': 68},
+            'lastSmart': {'reason': 'wet', 'percent': 68, 'at': '06:00'},
+          },
+          {
+            'id': 2,
+            'valve': false,
+            'moisture': {'valid': false, 'raw': 4095},
+            'lastSmart': {'reason': 'reboot'},
+          },
+        ],
+      };
+
+      // Act
+      final zones = ZoneStatus.listFromStatus(status);
+
+      // Assert
+      expect(zones[0].moisture?.percent, 68);
+      expect(zones[0].moisture?.raw, 1800);
+      expect(zones[0].moisture?.levelLabel, 'Húmedo');
+      expect(zones[0].lastSmart?.reason, SmartReason.wet);
+      expect(zones[0].lastSmart?.message, 'Omitido por humedad suficiente');
+      expect(zones[0].lastSmart?.at, '06:00');
+      expect(zones[1].moisture?.valid, isFalse);
+      expect(zones[1].moisture?.levelLabel, 'Sin lectura');
+      expect(zones[1].lastSmart, isNull); // motivo desconocido
+    });
+
+    test('con firmware sin sensor (v3.2) no hay lectura de humedad', () {
+      // Arrange
+      final status = {
+        'zones': [
+          {'id': 1, 'valve': false},
+          {'id': 2, 'valve': false, 'moisture': 'n/a'},
+        ],
+      };
+
+      // Act
+      final zones = ZoneStatus.listFromStatus(status);
+
+      // Assert
+      expect(zones[0].moisture, isNull);
+      expect(zones[1].moisture, isNull);
     });
   });
 }
