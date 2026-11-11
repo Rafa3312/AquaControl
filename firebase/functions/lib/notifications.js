@@ -2,8 +2,14 @@
 
 const crypto = require('node:crypto');
 
-// skip, reduce y sensor: decisiones del riego inteligente (Sprint 6, HU-10)
-const EVENT_TYPES = ['start', 'end', 'fail', 'skip', 'reduce', 'sensor'];
+// skip, reduce y sensor: riego inteligente por humedad (Sprint 6, HU-10)
+// postpone, cancel y rainsensor: riego por lluvia (Sprint 7, HU-11)
+const EVENT_TYPES = [
+  'start', 'end', 'fail', 'skip', 'reduce', 'sensor',
+  'postpone', 'cancel', 'rainsensor',
+];
+/** rainsensor es del sensor general de lluvia: se envía con zona 0. */
+const GENERAL_TYPES = ['rainsensor'];
 const SOURCES = ['manual', 'schedule'];
 const MAX_ZONES = 2;
 
@@ -40,7 +46,10 @@ function validateEvent(body) {
     return { ok: false, error: 'uid inválido' };
   }
   if (!EVENT_TYPES.includes(type)) return { ok: false, error: 'type inválido' };
-  if (!Number.isInteger(zone) || zone < 1 || zone > MAX_ZONES) return { ok: false, error: 'zone inválida' };
+  const minZone = GENERAL_TYPES.includes(type) ? 0 : 1;
+  if (!Number.isInteger(zone) || zone < minZone || zone > MAX_ZONES) {
+    return { ok: false, error: 'zone inválida' };
+  }
   if (!SOURCES.includes(source)) return { ok: false, error: 'source inválido' };
   if (minutes !== undefined && (!Number.isInteger(minutes) || minutes < 0 || minutes > 1440)) {
     return { ok: false, error: 'minutes inválido' };
@@ -99,6 +108,26 @@ function buildMessage(event, zoneName) {
         severity: 'info',
       };
     }
+    case 'postpone': {
+      const extra = event.minutes ? ` Durará ${event.minutes} min cuando llegue el momento.` : '';
+      return {
+        title: `Riego pospuesto por lluvia · ${name}`,
+        body: `Está lloviendo y el riego se reintenta cada 15 min, hasta 2 h.${extra}`,
+        severity: 'info',
+      };
+    }
+    case 'cancel':
+      return {
+        title: `Riego cancelado por lluvia · ${name}`,
+        body: 'Siguió lloviendo 2 h y el riego programado se canceló.',
+        severity: 'info',
+      };
+    case 'rainsensor':
+      return {
+        title: 'Sensor de lluvia sin lectura',
+        body: 'Los riegos se ejecutan según la programación y la humedad. Revisa el sensor de lluvia.',
+        severity: 'error',
+      };
     case 'sensor':
       return {
         title: `Sensor de humedad sin lectura · ${name}`,
