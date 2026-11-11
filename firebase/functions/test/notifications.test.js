@@ -83,3 +83,33 @@ test('el riego reducido indica los minutos y la falla del sensor es una alerta',
   assert.equal(sensor.title, 'Sensor de humedad sin lectura · Zona 1');
   assert.equal(sensor.severity, 'error');
 });
+
+// ── Riego por lluvia (Sprint 7) ───────────────────────────────────────────────
+test('acepta los avisos de lluvia: postpone y cancel en una zona', () => {
+  assert.equal(validateEvent({ ...VALID, type: 'postpone', source: 'schedule' }).ok, true);
+  assert.equal(validateEvent({ ...VALID, type: 'cancel', source: 'schedule' }).ok, true);
+});
+
+test('el aviso de sensor de lluvia va con zona 0 (sensor general)', () => {
+  const result = validateEvent({ ...VALID, type: 'rainsensor', zone: 0, minutes: undefined });
+  assert.equal(result.ok, true);
+  assert.equal(result.event.zone, 0);
+});
+
+test('rechaza zona 0 para avisos de una zona', () => {
+  assert.equal(validateEvent({ ...VALID, type: 'postpone', zone: 0 }).ok, false);
+});
+
+test('el mensaje de pospuesto y cancelado por lluvia incluye la zona', () => {
+  const postponed = buildMessage({ ...VALID, type: 'postpone', minutes: 10 }, 'Jardín');
+  assert.equal(postponed.title, 'Riego pospuesto por lluvia · Jardín');
+  assert.match(postponed.body, /15 min.*2 h/);
+  const cancelled = buildMessage({ ...VALID, type: 'cancel' }, 'Jardín');
+  assert.equal(cancelled.title, 'Riego cancelado por lluvia · Jardín');
+});
+
+test('la falla del sensor de lluvia es una alerta de sistema', () => {
+  const message = buildMessage({ ...VALID, type: 'rainsensor', zone: 0 }, 'Sensor de lluvia');
+  assert.equal(message.title, 'Sensor de lluvia sin lectura');
+  assert.equal(message.severity, 'error');
+});

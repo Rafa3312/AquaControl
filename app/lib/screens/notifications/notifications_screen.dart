@@ -176,6 +176,9 @@ class _NotificationTile extends StatelessWidget {
       NotificationKind.skip  => (Icons.grass_rounded, AppTheme.accent),
       NotificationKind.reduce => (Icons.opacity_rounded, AppTheme.warning),
       NotificationKind.sensor => (Icons.sensors_off_rounded, AppTheme.danger),
+      NotificationKind.postpone => (Icons.umbrella_rounded, AppTheme.accent),
+      NotificationKind.cancel => (Icons.block_rounded, AppTheme.warning),
+      NotificationKind.rainSensor => (Icons.sensors_off_rounded, AppTheme.danger),
     };
 
     return Container(

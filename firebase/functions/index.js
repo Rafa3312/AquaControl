@@ -53,8 +53,11 @@ exports.deviceEvent = onRequest({ region: 'us-central1', maxInstances: 5 }, asyn
       return;
     }
 
-    const zone = await db.doc(`users/${event.uid}/zones/${event.zone}`).get();
-    const zoneName = zone.get('name') || defaultZoneName(event.zone);
+    // zona 0 = sensor general de lluvia: no tiene nombre de zona
+    const zone = event.zone === 0 ? null : await db.doc(`users/${event.uid}/zones/${event.zone}`).get();
+    const zoneName = event.zone === 0
+      ? 'Sensor de lluvia'
+      : zone.get('name') || defaultZoneName(event.zone);
     const message = buildMessage(event, zoneName);
 
     await db.collection(`users/${event.uid}/notifications`).add({
