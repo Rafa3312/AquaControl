@@ -10,6 +10,7 @@ import '../../providers/notification_provider.dart';
 import '../../models/schedule.dart';
 import '../notifications/notifications_screen.dart';
 import '../main_screen.dart';
+import 'widgets/moisture_card.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -174,6 +175,10 @@ class _HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
 
                 // ── Control manual (zona seleccionada) ───────────────────────
                 _ManualControlCard(irr: irr, zoneName: zoneName),
+                const SizedBox(height: 20),
+
+                // ── Humedad del suelo y riego inteligente (HU-10) ─────────────
+                MoistureCard(zone: irr.selectedZone, zoneName: zoneName),
                 const SizedBox(height: 20),
 
                 // ── Programación activa de la zona ────────────────────────────
