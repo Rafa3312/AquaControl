@@ -1,6 +1,6 @@
 /**
  * ============================================================
- *  AquaControl – Firmware ESP32  v3.2  (Multizona + Avisos)
+ *  AquaControl – Firmware ESP32  v3.3  (Multizona + Avisos + Riego inteligente)
  * ============================================================
  *
  *  Hardware:
@@ -8,6 +8,8 @@
  *    Relé / MOSFET zona 1 = GPIO23   ·   zona 2 = GPIO19
  *    Sensores de retroalimentación opcionales (corriente o flujo):
  *      zona 1 = GPIO34 · zona 2 = GPIO35 (solo entrada, usar pull-down externo)
+ *    Sensor capacitivo de humedad del suelo (Sprint 6):
+ *      zona 1 = GPIO32 · zona 2 = GPIO33 (ADC1; ver moisture.h)
  *    LED integrado = GPIO2
  *
  *  Librerías (Herramientas → Administrar bibliotecas):
@@ -33,9 +35,10 @@
 #include <esp_system.h>
 #include <esp_random.h>
 #include <time.h>
+#include "smart_irrigation.h"   // incluye moisture.h
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-#define FW_VERSION         "3.2"
+#define FW_VERSION         "3.3"
 #define MDNS_NAME          "aquacontrol"
 #define SDA_PIN            21
 #define SCL_PIN            22
@@ -54,6 +57,8 @@
 #define ZONE_COUNT         2
 const uint8_t ZONE_PINS[ZONE_COUNT]       = {23, 19};
 const uint8_t ZONE_SENSE_PINS[ZONE_COUNT] = {34, 35};
+const uint8_t MOISTURE_PINS[ZONE_COUNT]   = {32, 33};
+#define MOISTURE_READ_MS   30000         // lectura periódica para /status
 // true solo si cada zona tiene sensor de retroalimentación conectado;
 // sin sensor, las entradas quedan flotando y se detectarían fallas falsas.
 #define FAULT_DETECTION    false
@@ -159,11 +164,24 @@ struct ZoneState {
   int           lastFiredMin;   // evita disparar dos veces la misma
   int           lastFiredIdx;   // programación en su ventana de ±1 min
   int32_t       lastFiredDate;  // AAAAMMDD del último disparo
+  // Riego inteligente (Sprint 6)
+  MoistureReading moisture;     // última lectura del sensor
+  SmartConfig   smart;          // activado + umbral (se guarda en NVS)
+  bool          everStopped;    // ya regó desde el arranque
+  unsigned long stoppedMs;      // cuándo se apagó (tiempo de absorción)
+  bool          pending;        // riego esperando la absorción
+  uint16_t      pendingMin;
+  unsigned long pendingAt;
+  bool          hasLast;        // última decisión, para /status
+  SmartReason   lastReason;
+  bool          lastValid;
+  uint8_t       lastPercent;
+  DateTime      lastAt;
 };
 ZoneState zones[ZONE_COUNT];
 
 // ─── Cola de avisos ──────────────────────────────────────────────────────────
-enum EventType : uint8_t { EV_START, EV_END, EV_FAIL };
+enum EventType : uint8_t { EV_START, EV_END, EV_FAIL, EV_SKIP, EV_REDUCE, EV_SENSOR };
 struct PendingEvent {
   uint8_t       type;
   uint8_t       zone;          // 1..ZONE_COUNT
@@ -171,6 +189,8 @@ struct PendingEvent {
   uint16_t      minutes;
   uint8_t       attempts;
   unsigned long notBefore;
+  uint8_t       moisture;      // % de humedad (255 = sin dato)
+  uint8_t       threshold;     // umbral del riego inteligente (0 = sin dato)
 };
 PendingEvent eventQueue[EVENT_QUEUE_SIZE];
 int          eventHead  = 0;
@@ -217,11 +237,18 @@ bool anyZoneActive();
 void checkStop();
 void checkSchedules();
 void checkFaults();
+void loadSmart();
+void saveSmart(uint8_t z);
+void readMoisture(bool force);
+void startScheduled(uint8_t z, uint16_t minutes);
+void runSmart(uint8_t z, uint16_t minutes);
+void checkPending();
 int  getDayBit(int dow);
 void syncNTP();
 
 // ── Avisos ────────────────────────────────────────────────────────────────────
-void queueEvent(uint8_t type, uint8_t zone, bool manual, uint16_t minutes);
+void queueEvent(uint8_t type, uint8_t zone, bool manual, uint16_t minutes,
+                uint8_t moisture = 255, uint8_t threshold = 0);
 void processEvents();
 bool postEvent(const PendingEvent& e);
 
@@ -238,7 +265,7 @@ void setup() {
   delay(300);
 
   Serial.println(F("\n╔═══════════════════════════════════╗"));
-  Serial.println(F("║  AquaControl  Firmware v3.2       ║"));
+  Serial.println(F("║  AquaControl  Firmware v3.3       ║"));
   Serial.println(F("╚═══════════════════════════════════╝"));
   Serial.printf("Device ID:  %s\n", getDeviceShortId().c_str());
   Serial.printf("Reset PIN:  %s  <- anota este numero\n", getResetPin().c_str());
@@ -251,6 +278,9 @@ void setup() {
     zones[z].lastFiredMin = zones[z].lastFiredIdx = zones[z].lastFiredDate = -1;
   }
   pinMode(LED_PIN, OUTPUT);
+  moistureBegin();
+  loadSmart();
+  readMoisture(true);
 
   Wire.begin(SDA_PIN, SCL_PIN);
   if (!rtc.begin()) {
@@ -340,6 +370,22 @@ void setup() {
         o["manual"] = zones[z].active && zones[z].manual;
         o["fault"]  = zones[z].fault;
         if (zones[z].active && zones[z].timed) o["stopAt"] = formatTime(zones[z].stopAt);
+
+        // Riego inteligente (Sprint 6)
+        JsonObject m = o["moisture"].to<JsonObject>();
+        m["valid"] = zones[z].moisture.valid;
+        m["raw"]   = zones[z].moisture.raw;
+        if (zones[z].moisture.valid) m["percent"] = zones[z].moisture.percent;
+        JsonObject sm = o["smart"].to<JsonObject>();
+        sm["enabled"]   = zones[z].smart.enabled;
+        sm["threshold"] = zones[z].smart.threshold;
+        if (zones[z].pending) sm["pending"] = true;
+        if (zones[z].hasLast) {
+          JsonObject l = o["lastSmart"].to<JsonObject>();
+          l["reason"] = smartReasonName(zones[z].lastReason);
+          if (zones[z].lastValid) l["percent"] = zones[z].lastPercent;
+          l["at"] = formatTime(zones[z].lastAt);
+        }
       }
       // Compatibilidad con la app v1: hora de apagado de la primera zona temporizada
       for (int z = 0; z < ZONE_COUNT; z++) {
@@ -480,6 +526,28 @@ void setup() {
       JsonDocument r; r["ok"]=true; r["zone"]=schedules[target].zone; sendJson(200,r);
     });
 
+    // Riego inteligente de una zona.
+    // Body: {"zone": 1..ZONE_COUNT, "enabled": true|false, "threshold": 10..90}
+    server.on("/smart", HTTP_POST, []() {
+      if (!checkToken()) return;
+      if (!server.hasArg("plain")) { sendError(400,"Body vacio"); return; }
+      JsonDocument doc;
+      if (deserializeJson(doc,server.arg("plain"))) { sendError(400,"JSON invalido"); return; }
+      int zone=doc["zone"]|0;
+      if (!validZone(zone)) { sendError(400,"Zona invalida"); return; }
+      if (!doc["enabled"].is<bool>()) { sendError(400,"enabled invalido"); return; }
+      if (!doc["threshold"].is<int>()||!smartThresholdValid(doc["threshold"].as<int>())) {
+        sendError(400,"Umbral invalido (10 a 90)"); return;
+      }
+      ZoneState& s=zones[zone-1];
+      s.smart.enabled=doc["enabled"].as<bool>();
+      s.smart.threshold=(uint8_t)doc["threshold"].as<int>();
+      saveSmart(zone-1);
+      JsonDocument r;
+      r["ok"]=true; r["zone"]=zone; r["enabled"]=s.smart.enabled; r["threshold"]=s.smart.threshold;
+      sendJson(200,r);
+    });
+
     server.on("/reset", HTTP_POST, []() {
       if (!checkToken()) return;
       if (!server.hasArg("plain")) { sendError(400,"Body vacio"); return; }
@@ -490,6 +558,7 @@ void setup() {
       apagarTodas(false);
       prefs.begin("aqua-auth",false);  prefs.clear(); prefs.end();
       prefs.begin("aqua-sched",false); prefs.clear(); prefs.end();
+      prefs.begin("aqua-smart",false); prefs.clear(); prefs.end();
       prefs.begin("aqua-wifi",false);  prefs.clear(); prefs.end();
       logSecure("factory_reset_full");
       JsonDocument r; r["ok"]=true; r["message"]="Reset completo"; sendJson(200,r);
@@ -511,6 +580,7 @@ void setup() {
       apagarTodas(false);
       prefs.begin("aqua-auth",false);  prefs.clear(); prefs.end();
       prefs.begin("aqua-sched",false); prefs.clear(); prefs.end();
+      prefs.begin("aqua-smart",false); prefs.clear(); prefs.end();
       // NO borrar WiFi — solo desvincular token
       logSecure("reset_pin_ok");
       JsonDocument r; r["ok"]=true; r["message"]="Token borrado. Listo para vincular."; sendJson(200,r);
@@ -622,6 +692,8 @@ void loop() {
   server.handleClient();
   if (currentMode==MODE_NORMAL) {
     checkStop();
+    readMoisture(false);
+    checkPending();
     checkSchedules();
     checkFaults();
     processEvents();
@@ -777,6 +849,7 @@ void apagarZona(uint8_t z, bool notify) {
   uint16_t ran=(uint16_t)((rtc.now()-s.startedAt).totalseconds()/60);
   bool wasManual=s.manual;
   s.active=false; s.manual=false; s.timed=false;
+  s.everStopped=true; s.stoppedMs=millis();   // inicia el tiempo de absorción
   digitalWrite(ZONE_PINS[z],LOW);
   if (!PRODUCTION_MODE) Serial.printf("[Zona %d] OFF\n",z+1);
   if (notify) queueEvent(EV_END,z+1,wasManual,ran);
@@ -805,14 +878,14 @@ void checkSchedules() {
     Schedule& s=schedules[i];
     if (!s.active||!validZone(s.zone)) continue;
     ZoneState& zs=zones[s.zone-1];
-    if (zs.active) continue;                  // la zona ya está regando
+    if (zs.active||zs.pending) continue;     // la zona ya riega o espera absorción
     if (!(s.days&(1<<dayBit))) continue;
     int schedMin=s.startHour*60+s.startMinute;
     if (abs(currentMin-schedMin)>1) continue;
     if (zs.lastFiredIdx==i&&zs.lastFiredMin==schedMin&&zs.lastFiredDate==today) continue;
     zs.lastFiredIdx=i; zs.lastFiredMin=schedMin; zs.lastFiredDate=today;
-    encenderZona(s.zone-1,false,s.durationMin);
     Serial.printf("[Scheduler] Programacion #%d disparada en zona %d\n",i,s.zone);
+    startScheduled(s.zone-1,s.durationMin);
   }
 }
 
@@ -836,15 +909,104 @@ void checkFaults() {
 int getDayBit(int dow) { return (dow==0)?6:(dow-1); }
 
 // ══════════════════════════════════════════════════════════════════════════════
+//  RIEGO INTELIGENTE POR HUMEDAD (Sprint 6, HU-10) — tabla en smart_irrigation.h
+// ══════════════════════════════════════════════════════════════════════════════
+void loadSmart() {
+  prefs.begin("aqua-smart",true);
+  for (int z=0;z<ZONE_COUNT;z++) {
+    char k[4];
+    snprintf(k,sizeof(k),"e%d",z+1); zones[z].smart.enabled=prefs.getBool(k,false);
+    snprintf(k,sizeof(k),"t%d",z+1); int t=prefs.getUChar(k,SMART_THRESHOLD_DEFAULT);
+    zones[z].smart.threshold=smartThresholdValid(t)?t:SMART_THRESHOLD_DEFAULT;
+  }
+  prefs.end();
+}
+
+void saveSmart(uint8_t z) {
+  prefs.begin("aqua-smart",false);
+  char k[4];
+  snprintf(k,sizeof(k),"e%d",z+1); prefs.putBool(k,zones[z].smart.enabled);
+  snprintf(k,sizeof(k),"t%d",z+1); prefs.putUChar(k,zones[z].smart.threshold);
+  prefs.end();
+}
+
+// Lee los sensores cada MOISTURE_READ_MS (o de inmediato con force).
+void readMoisture(bool force) {
+  static unsigned long last=0;
+  if (!force&&millis()-last<MOISTURE_READ_MS) return;
+  last=millis();
+  for (int z=0;z<ZONE_COUNT;z++) zones[z].moisture=moistureRead(MOISTURE_PINS[z]);
+}
+
+// Todo riego programado pasa por aquí. Si la zona se apagó hace menos de
+// 3 minutos, el agua todavía no llega al sensor: se espera la absorción.
+void startScheduled(uint8_t z, uint16_t minutes) {
+  ZoneState& s=zones[z];
+  if (s.smart.enabled&&s.everStopped&&millis()-s.stoppedMs<SMART_ABSORPTION_MS) {
+    s.pending=true; s.pendingMin=minutes; s.pendingAt=s.stoppedMs+SMART_ABSORPTION_MS;
+    Serial.printf("[Riego inteligente] Zona %d: esperando absorcion antes de medir\n",z+1);
+    return;
+  }
+  runSmart(z,minutes);
+}
+
+// Mide de nuevo, decide y enciende (o no) la zona. Cada decisión queda en el
+// Monitor Serial con su motivo.
+void runSmart(uint8_t z, uint16_t minutes) {
+  ZoneState& s=zones[z];
+  s.moisture=moistureRead(MOISTURE_PINS[z]);
+  SmartDecision d=smartDecide(s.smart,s.moisture,minutes);
+  uint8_t pct=s.moisture.valid?s.moisture.percent:255;
+
+  if (s.smart.enabled) {
+    s.hasLast=true; s.lastReason=d.reason; s.lastValid=s.moisture.valid;
+    s.lastPercent=s.moisture.percent; s.lastAt=rtc.now();
+    Serial.printf("[Riego inteligente] Zona %d: humedad %d%% (raw %d, %s), umbral %d%% -> %s, %d min\n",
+      z+1,s.moisture.percent,s.moisture.raw,s.moisture.valid?"valida":"INVALIDA",
+      s.smart.threshold,smartReasonName(d.reason),d.minutes);
+  }
+
+  switch (d.reason) {
+    case SMART_WET:      // suelo con humedad suficiente: no se enciende
+      queueEvent(EV_SKIP,z+1,false,0,pct,s.smart.threshold);
+      break;
+    case SMART_NEAR:
+      encenderZona(z,false,d.minutes);
+      queueEvent(EV_REDUCE,z+1,false,d.minutes,pct,s.smart.threshold);
+      break;
+    case SMART_SENSOR:   // falla segura: se riega lo programado y se avisa
+      logSecure("moisture_sensor_fault");
+      encenderZona(z,false,d.minutes);
+      queueEvent(EV_SENSOR,z+1,false,d.minutes);
+      break;
+    default:
+      encenderZona(z,false,d.minutes);
+      break;
+  }
+}
+
+// Riegos que esperaban el tiempo de absorción.
+void checkPending() {
+  for (int z=0;z<ZONE_COUNT;z++) {
+    ZoneState& s=zones[z];
+    if (!s.pending||(long)(millis()-s.pendingAt)<0) continue;
+    s.pending=false;
+    if (s.active) continue;   // se encendió manualmente mientras tanto
+    runSmart(z,s.pendingMin);
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
 //  AVISOS → Cloud Function deviceEvent (notificaciones push)
 // ══════════════════════════════════════════════════════════════════════════════
-void queueEvent(uint8_t type, uint8_t zone, bool manual, uint16_t minutes) {
+void queueEvent(uint8_t type, uint8_t zone, bool manual, uint16_t minutes,
+                uint8_t moisture, uint8_t threshold) {
   if (strlen(EVENT_URL)==0||authToken.isEmpty()) return;
   if (eventCount==EVENT_QUEUE_SIZE) {             // cola llena: se descarta el más viejo
     eventHead=(eventHead+1)%EVENT_QUEUE_SIZE; eventCount--;
   }
   int idx=(eventHead+eventCount)%EVENT_QUEUE_SIZE;
-  eventQueue[idx]={type,zone,manual,minutes,0,0};
+  eventQueue[idx]={type,zone,manual,minutes,0,0,moisture,threshold};
   eventCount++;
 }
 
@@ -863,7 +1025,7 @@ void processEvents() {
 }
 
 bool postEvent(const PendingEvent& e) {
-  static const char* TYPES[]={"start","end","fail"};
+  static const char* TYPES[]={"start","end","fail","skip","reduce","sensor"};
   WiFiClientSecure client;
   client.setCACert(GOOGLE_ROOT_CAS);
   client.setTimeout(8);
@@ -878,6 +1040,8 @@ bool postEvent(const PendingEvent& e) {
   d["type"]=TYPES[e.type]; d["zone"]=e.zone;
   d["source"]=e.manual?"manual":"schedule";
   if (e.minutes>0) d["minutes"]=e.minutes;
+  if (e.moisture<=100) d["moisture"]=e.moisture;
+  if (e.threshold>0) d["threshold"]=e.threshold;
   String body; serializeJson(d,body);
 
   int code=http.POST(body);
