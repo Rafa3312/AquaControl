@@ -3,7 +3,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'zone.dart';
 
 /// skip, reduce y sensor son del riego inteligente (Sprint 6, HU-10).
-enum NotificationKind { start, end, fail, skip, reduce, sensor }
+enum NotificationKind { start, end, fail, skip, reduce, sensor, postpone, cancel, rainSensor }
 
 /// Aviso de riego guardado por la Cloud Function en users/{uid}/notifications.
 class IrrigationNotification {
@@ -29,7 +29,9 @@ class IrrigationNotification {
 
   /// Falla de la válvula o del sensor de humedad: se resalta en la lista.
   bool get isFailure =>
-      kind == NotificationKind.fail || kind == NotificationKind.sensor;
+      kind == NotificationKind.fail ||
+      kind == NotificationKind.sensor ||
+      kind == NotificationKind.rainSensor;
 
   factory IrrigationNotification.fromMap(String id, Map<String, dynamic> data) {
     final kind = switch (data['type']) {
@@ -38,6 +40,9 @@ class IrrigationNotification {
       'skip' => NotificationKind.skip,
       'reduce' => NotificationKind.reduce,
       'sensor' => NotificationKind.sensor,
+      'postpone' => NotificationKind.postpone,
+      'cancel' => NotificationKind.cancel,
+      'rainsensor' => NotificationKind.rainSensor,
       _ => NotificationKind.start,
     };
     final rawZone = data['zone'];
@@ -77,6 +82,12 @@ class IrrigationNotification {
         return 'Riego reducido · $zoneName';
       case NotificationKind.sensor:
         return 'Sensor de humedad sin lectura · $zoneName';
+      case NotificationKind.postpone:
+        return 'Riego pospuesto por lluvia · $zoneName';
+      case NotificationKind.cancel:
+        return 'Riego cancelado por lluvia · $zoneName';
+      case NotificationKind.rainSensor:
+        return 'Sensor de lluvia sin lectura';
     }
   }
 }

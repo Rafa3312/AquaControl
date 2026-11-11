@@ -198,6 +198,41 @@ void main() {
     expect(irrigation.zone(2).moisture, isNull);
   });
 
+  test('syncStatus lee el sensor de lluvia y avisa solo si cambia la lluvia', () async {
+    // Arrange
+    irrigation.setDeviceProvider(device);
+    var avisos = 0;
+    irrigation.addListener(() => avisos++);
+    device.status = {'rain': {'valid': true, 'raining': false, 'raw': 3900}};
+
+    // Act 1: sin lluvia
+    await irrigation.syncStatus();
+    final primero = avisos;
+    // Act 2: solo cambia la lectura cruda: no hay aviso
+    device.status = {'rain': {'valid': true, 'raining': false, 'raw': 3850}};
+    await irrigation.syncStatus();
+    // Act 3: empieza a llover
+    device.status = {'rain': {'valid': true, 'raining': true, 'raw': 1500}};
+    await irrigation.syncStatus();
+
+    // Assert
+    expect(irrigation.rain?.label, 'Lloviendo');
+    expect(irrigation.rain?.raw, 1500);
+    expect(avisos, primero + 1);
+  });
+
+  test('con firmware anterior no hay estado de lluvia', () async {
+    // Arrange
+    irrigation.setDeviceProvider(device);
+    device.status = {'zones': []};
+
+    // Act
+    await irrigation.syncStatus();
+
+    // Assert
+    expect(irrigation.rain, isNull);
+  });
+
   test('al reconectarse el dispositivo se sincroniza el estado', () async {
     // Arrange
     irrigation.setDeviceProvider(device);

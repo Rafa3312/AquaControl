@@ -74,7 +74,8 @@ class _AquaControlAppState extends State<AquaControlApp>
     FirebaseMessaging.onMessage.listen((message) {
       final n = message.notification;
       if (n == null) return;
-      final isFailure = const ['fail', 'sensor'].contains(message.data['type']);
+      final isFailure =
+          const ['fail', 'sensor', 'rainsensor'].contains(message.data['type']);
       _messengerKey.currentState?.showSnackBar(SnackBar(
         backgroundColor: isFailure ? AppTheme.danger : AppTheme.bgCardLight,
         content: Text('${n.title ?? 'AquaControl'}\n${n.body ?? ''}'),

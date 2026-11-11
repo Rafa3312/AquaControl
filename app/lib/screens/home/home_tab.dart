@@ -11,6 +11,7 @@ import '../../models/schedule.dart';
 import '../notifications/notifications_screen.dart';
 import '../main_screen.dart';
 import 'widgets/moisture_card.dart';
+import 'widgets/weather_card.dart';
 
 class HomeTab extends StatefulWidget {
   const HomeTab({super.key});
@@ -179,6 +180,10 @@ class _HomeTabState extends State<HomeTab> with SingleTickerProviderStateMixin {
 
                 // ── Humedad del suelo y riego inteligente (HU-10) ─────────────
                 MoistureCard(zone: irr.selectedZone, zoneName: zoneName),
+                const SizedBox(height: 20),
+
+                // ── Clima por el sensor de lluvia (HU-11) ─────────────────────
+                const WeatherCard(),
                 const SizedBox(height: 20),
 
                 // ── Programación activa de la zona ────────────────────────────

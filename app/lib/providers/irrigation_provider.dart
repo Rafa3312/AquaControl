@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import '../models/rain.dart';
 import '../models/smart_irrigation.dart';
 import '../models/zone.dart';
 import 'device_provider.dart';
@@ -56,10 +57,12 @@ class IrrigationProvider extends ChangeNotifier {
   };
   int    _selectedZone    = 1;
   double _waterUsageToday = 0;
+  RainStatus? _rain;  // sensor de lluvia (Sprint 7); null con firmware anterior
   int    _sessionsToday   = 0;
 
   // ── Zonas ────────────────────────────────────────────────────────────────
   List<ZoneRuntime> get zones => _zones.values.toList();
+  RainStatus? get rain => _rain;
   ZoneRuntime zone(int id) => _zones[id]!;
   int  get selectedZone => _selectedZone;
   bool get anyActive    => _zones.values.any((z) => z.isActive);
@@ -141,6 +144,13 @@ class IrrigationProvider extends ChangeNotifier {
         z.lastSmart = zs.lastSmart;
         changed = true;
       }
+    }
+    final rain = RainStatus.fromJson(espStatus['rain']);
+    if (rain?.raining != _rain?.raining || rain?.valid != _rain?.valid) {
+      _rain = rain;
+      changed = true;
+    } else if (rain != null) {
+      _rain = rain;  // solo cambia el valor crudo: no hace falta avisar
     }
     if (changed) notifyListeners();
   }
