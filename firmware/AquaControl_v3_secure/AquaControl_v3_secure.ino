@@ -1,6 +1,6 @@
 /**
  * ============================================================
- *  AquaControl – Firmware ESP32  v3.3  (Multizona + Avisos + Riego inteligente)
+ *  AquaControl – Firmware ESP32  v3.4  (Multizona + Avisos + Humedad + Lluvia)
  * ============================================================
  *
  *  Hardware:
@@ -10,6 +10,7 @@
  *      zona 1 = GPIO34 · zona 2 = GPIO35 (solo entrada, usar pull-down externo)
  *    Sensor capacitivo de humedad del suelo (Sprint 6):
  *      zona 1 = GPIO32 · zona 2 = GPIO33 (ADC1; ver moisture.h)
+ *    Sensor de lluvia con salida analógica (Sprint 7): GPIO36 (ver rain.h)
  *    LED integrado = GPIO2
  *
  *  Librerías (Herramientas → Administrar bibliotecas):
@@ -36,9 +37,10 @@
 #include <esp_random.h>
 #include <time.h>
 #include "smart_irrigation.h"   // incluye moisture.h
+#include "rain.h"               // sensor de lluvia (y rain_logic.h)
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-#define FW_VERSION         "3.3"
+#define FW_VERSION         "3.4"
 #define MDNS_NAME          "aquacontrol"
 #define SDA_PIN            21
 #define SCL_PIN            22
@@ -177,11 +179,19 @@ struct ZoneState {
   bool          lastValid;
   uint8_t       lastPercent;
   DateTime      lastAt;
+  RainHold      hold;           // riego programado pospuesto por lluvia
 };
 ZoneState zones[ZONE_COUNT];
 
+// Sensor de lluvia (global: no es de una zona)
+RainFilter    rainFilter;
+unsigned long rainSampleLast   = 0;
+unsigned long lastWateringStopMs = 0;
+bool          wateredOnce      = false;
+
 // ─── Cola de avisos ──────────────────────────────────────────────────────────
-enum EventType : uint8_t { EV_START, EV_END, EV_FAIL, EV_SKIP, EV_REDUCE, EV_SENSOR };
+enum EventType : uint8_t { EV_START, EV_END, EV_FAIL, EV_SKIP, EV_REDUCE, EV_SENSOR,
+                           EV_POSTPONE, EV_CANCEL, EV_RAIN_SENSOR };
 struct PendingEvent {
   uint8_t       type;
   uint8_t       zone;          // 1..ZONE_COUNT
@@ -243,6 +253,11 @@ void readMoisture(bool force);
 void startScheduled(uint8_t z, uint16_t minutes);
 void runSmart(uint8_t z, uint16_t minutes);
 void checkPending();
+void readRain();
+void checkRainHolds();
+void startRainHold(uint8_t z, uint16_t minutes);
+bool rainNow();
+unsigned long msSinceWatering();
 int  getDayBit(int dow);
 void syncNTP();
 
@@ -281,6 +296,7 @@ void setup() {
   moistureBegin();
   loadSmart();
   readMoisture(true);
+  rainFilter.valid = true;   // se corrige con la primera lectura real
 
   Wire.begin(SDA_PIN, SCL_PIN);
   if (!rtc.begin()) {
@@ -362,6 +378,12 @@ void setup() {
         now.year(), now.month(), now.day(), now.hour(), now.minute(), now.second());
       doc["rtc"] = buf;
 
+      // Sensor de lluvia (Sprint 7): "raining" ya descuenta el falso positivo
+      JsonObject rn = doc["rain"].to<JsonObject>();
+      rn["valid"]   = rainFilter.valid;
+      rn["raw"]     = rainFilter.raw;
+      rn["raining"] = rainNow();
+
       JsonArray arr = doc["zones"].to<JsonArray>();
       for (int z = 0; z < ZONE_COUNT; z++) {
         JsonObject o = arr.add<JsonObject>();
@@ -370,6 +392,8 @@ void setup() {
         o["manual"] = zones[z].active && zones[z].manual;
         o["fault"]  = zones[z].fault;
         if (zones[z].active && zones[z].timed) o["stopAt"] = formatTime(zones[z].stopAt);
+
+        if (zones[z].hold.active) o["rainHold"] = true;
 
         // Riego inteligente (Sprint 6)
         JsonObject m = o["moisture"].to<JsonObject>();
@@ -693,6 +717,8 @@ void loop() {
   if (currentMode==MODE_NORMAL) {
     checkStop();
     readMoisture(false);
+    readRain();
+    checkRainHolds();
     checkPending();
     checkSchedules();
     checkFaults();
@@ -850,6 +876,7 @@ void apagarZona(uint8_t z, bool notify) {
   bool wasManual=s.manual;
   s.active=false; s.manual=false; s.timed=false;
   s.everStopped=true; s.stoppedMs=millis();   // inicia el tiempo de absorción
+  lastWateringStopMs=millis(); wateredOnce=true; // inicia la ventana de falso positivo
   digitalWrite(ZONE_PINS[z],LOW);
   if (!PRODUCTION_MODE) Serial.printf("[Zona %d] OFF\n",z+1);
   if (notify) queueEvent(EV_END,z+1,wasManual,ran);
@@ -878,7 +905,7 @@ void checkSchedules() {
     Schedule& s=schedules[i];
     if (!s.active||!validZone(s.zone)) continue;
     ZoneState& zs=zones[s.zone-1];
-    if (zs.active||zs.pending) continue;     // la zona ya riega o espera absorción
+    if (zs.active||zs.pending||zs.hold.active) continue; // riega, espera absorción o lluvia
     if (!(s.days&(1<<dayBit))) continue;
     int schedMin=s.startHour*60+s.startMinute;
     if (abs(currentMin-schedMin)>1) continue;
@@ -942,6 +969,8 @@ void readMoisture(bool force) {
 // 3 minutos, el agua todavía no llega al sensor: se espera la absorción.
 void startScheduled(uint8_t z, uint16_t minutes) {
   ZoneState& s=zones[z];
+  // Prioridad 1: lluvia. Si llueve, el riego se pospone (no se mide humedad).
+  if (rainVerdict(rainNow(),0)==RAIN_WAIT) { startRainHold(z,minutes); return; }
   if (s.smart.enabled&&s.everStopped&&millis()-s.stoppedMs<SMART_ABSORPTION_MS) {
     s.pending=true; s.pendingMin=minutes; s.pendingAt=s.stoppedMs+SMART_ABSORPTION_MS;
     Serial.printf("[Riego inteligente] Zona %d: esperando absorcion antes de medir\n",z+1);
@@ -985,6 +1014,55 @@ void runSmart(uint8_t z, uint16_t minutes) {
   }
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+//  RIEGO POR LLUVIA (Sprint 7, HU-11) — reglas en rain_logic.h
+// ══════════════════════════════════════════════════════════════════════════════
+unsigned long msSinceWatering() {
+  return wateredOnce ? millis()-lastWateringStopMs : 0xFFFFFFFFUL;
+}
+
+bool rainNow() {
+  bool irrigating=anyZoneActive();
+  return rainEffective(rainFilter,irrigating,msSinceWatering());
+}
+
+// Lee el sensor cada RAIN_SAMPLE_MS y avisa una sola vez si deja de dar lectura.
+void readRain() {
+  if (millis()-rainSampleLast<RAIN_SAMPLE_MS) return;
+  rainSampleLast=millis();
+  bool wasValid=rainFilter.valid;
+  rainFilterStep(rainFilter,rainRead());
+  if (wasValid&&!rainFilter.valid) {
+    logSecure("rain_sensor_fault");
+    queueEvent(EV_RAIN_SENSOR,0,false,0);   // zona 0 = sensor general
+  }
+}
+
+// Pospone un riego programado: reintenta cada 15 min hasta 2 h.
+void startRainHold(uint8_t z, uint16_t minutes) {
+  zones[z].hold={true,minutes,millis(),millis()+RAIN_RETRY_MS};
+  Serial.printf("[Lluvia] Zona %d: riego pospuesto (llueve)\n",z+1);
+  queueEvent(EV_POSTPONE,z+1,false,minutes);
+}
+
+void checkRainHolds() {
+  for (int z=0;z<ZONE_COUNT;z++) {
+    ZoneState& s=zones[z];
+    if (!s.hold.active||millis()<s.hold.nextCheckMs) continue;
+    unsigned long waited=millis()-s.hold.startedMs;
+    RainVerdict v=rainVerdict(rainNow(),waited);
+    if (v==RAIN_WAIT) { s.hold.nextCheckMs+=RAIN_RETRY_MS; continue; }
+    s.hold.active=false;
+    if (v==RAIN_CANCEL) {
+      Serial.printf("[Lluvia] Zona %d: riego cancelado tras 2 h de lluvia\n",z+1);
+      queueEvent(EV_CANCEL,z+1,false,s.hold.minutes);
+      continue;
+    }
+    // Ya no llueve: sigue la regla de humedad y, si aplica, la absorción
+    if (!s.active) startScheduled(z,s.hold.minutes);
+  }
+}
+
 // Riegos que esperaban el tiempo de absorción.
 void checkPending() {
   for (int z=0;z<ZONE_COUNT;z++) {
@@ -1025,7 +1103,8 @@ void processEvents() {
 }
 
 bool postEvent(const PendingEvent& e) {
-  static const char* TYPES[]={"start","end","fail","skip","reduce","sensor"};
+  static const char* TYPES[]={"start","end","fail","skip","reduce","sensor",
+                              "postpone","cancel","rainsensor"};
   WiFiClientSecure client;
   client.setCACert(GOOGLE_ROOT_CAS);
   client.setTimeout(8);

@@ -50,7 +50,7 @@ documento de cada sprint cuando lo cierres.
 | 3 | Programación automática de riegos | #3 crear, #4 editar/eliminar programas, horarios en firmware | Terminado | línea base |
 | 4 | Autenticación de usuario | #5 registro/login, #9 recuperar contraseña | Terminado | línea base |
 | 5 | Múltiples zonas y notificaciones | #7 zonas, #8 notificaciones | Terminado | [sprint-05](sprint-05.md) |
-| 6 | Riego por humedad del suelo | #10 sensor de humedad | En curso | [sprint-06](sprint-06.md) |
+| 6 | Riego por humedad del suelo | #10 sensor de humedad | Terminado | [sprint-06](sprint-06.md) |
 | 7 | Riego por condiciones climáticas | #11 sensor de lluvia | En curso | [sprint-07](sprint-07.md) |
 | 8 | Historial y estadísticas | #14 historial, #16 consumo de agua | Pendiente | — |
 | 9 | Confiabilidad ante fallas | #12 alertas de fallas, #13 modo offline | Pendiente | — |
