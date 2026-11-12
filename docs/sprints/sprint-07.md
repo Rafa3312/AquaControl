@@ -1,8 +1,8 @@
 # Sprint 07 — Riego inteligente por lluvia
 
 - **Semana:** del 12/10/2026 al 16/10/2026
-- **Rama / PR:** `feature/sprint-07-riego-lluvia` → `develop` (apilada sobre los PR de
-  Sprint 6 #19 y el firmware v3.3; al integrarlos, el diff queda solo con lo de lluvia)
+- **Rama / PR:** app y Cloud Function en `feature/sprint-07-riego-lluvia` (PR #21); firmware
+  en `feature/sprint-07-firmware-lluvia`
 - **Versión al cierre:** app `1.1.0+2` (se sube en la siguiente release) · firmware `v3.4`
 
 ## Objetivo del Sprint
@@ -72,7 +72,7 @@ con valores simulados y tabla de prioridades (lluvia → humedad → programaci�
 | Unitarias (PC, C++) | `firmware/tests/rain_logic_test.cpp`: antirrebote, valores límite, falla segura, falso positivo y reintentos (21) | ✅ |
 | Unitarias (CI) | App: modelo de lluvia y `/status` (13) | ✅ |
 | Unitarias (CI) | Cloud Function: avisos de lluvia (17 en total) | ✅ |
-| Compilación | Firmware v3.4 para ESP32 | ✅ (ver el resultado en el PR) |
+| Compilación | Firmware v3.4 para ESP32 (90.8% de la flash) | ✅ |
 | Hardware | Lluvia simulada con regadera | Pendiente |
 | Hardware | **Lluvia real en exterior** | Pendiente: no llovió en la semana |
 
