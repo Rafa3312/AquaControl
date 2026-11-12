@@ -1,6 +1,6 @@
 /**
  * ============================================================
- *  AquaControl – Firmware ESP32  v3.4  (Multizona + Avisos + Humedad + Lluvia)
+ *  AquaControl – Firmware ESP32  v3.5  (Multizona + Avisos + Humedad + Lluvia + Historial)
  * ============================================================
  *
  *  Hardware:
@@ -38,9 +38,10 @@
 #include <time.h>
 #include "smart_irrigation.h"   // incluye moisture.h
 #include "rain.h"               // sensor de lluvia (y rain_logic.h)
+#include "history_log.h"        // registro de riegos (Sprint 8)
 
 // ─── Configuración ───────────────────────────────────────────────────────────
-#define FW_VERSION         "3.4"
+#define FW_VERSION         "3.5"
 #define MDNS_NAME          "aquacontrol"
 #define SDA_PIN            21
 #define SCL_PIN            22
@@ -75,6 +76,13 @@ const uint8_t MOISTURE_PINS[ZONE_COUNT]   = {32, 33};
 #define EVENT_QUEUE_SIZE   8
 #define EVENT_MAX_ATTEMPTS 3
 #define EVENT_RETRY_MS     30000
+
+// ─── Historial de riegos (Sprint 8) ──────────────────────────────────────────
+// URL de la Cloud Function deviceHistory. Vacía = el historial solo se guarda en el ESP32.
+// Ej: "https://us-central1-<id-del-proyecto>.cloudfunctions.net/deviceHistory"
+#define HISTORY_URL        ""
+#define HISTORY_RETRY_MS   300000        // tras un fallo, reintenta a los 5 min
+#define HISTORY_NEXT_MS    2000          // con más pendientes, siguiente lote en 2 s
 
 // Certificados raíz de Google Trust Services (GTS Root R1 y R4, vigentes a 2036)
 // para validar el HTTPS de Cloud Functions. Fuente: https://pki.goog/repository/
@@ -180,6 +188,7 @@ struct ZoneState {
   uint8_t       lastPercent;
   DateTime      lastAt;
   RainHold      hold;           // riego programado pospuesto por lluvia
+  uint8_t       histReason;     // motivo del riego en curso (HistReason), para el historial
 };
 ZoneState zones[ZONE_COUNT];
 
@@ -188,6 +197,10 @@ RainFilter    rainFilter;
 unsigned long rainSampleLast   = 0;
 unsigned long lastWateringStopMs = 0;
 bool          wateredOnce      = false;
+
+// ─── Historial de riegos (Sprint 8) ──────────────────────────────────────────
+HistLog       histLog;
+unsigned long histNextTryMs = 0;
 
 // ─── Cola de avisos ──────────────────────────────────────────────────────────
 enum EventType : uint8_t { EV_START, EV_END, EV_FAIL, EV_SKIP, EV_REDUCE, EV_SENSOR,
@@ -265,6 +278,11 @@ void syncNTP();
 void queueEvent(uint8_t type, uint8_t zone, bool manual, uint16_t minutes,
                 uint8_t moisture = 255, uint8_t threshold = 0);
 void processEvents();
+void loadHistory();
+void saveHistory();
+void logHistory(uint8_t zone, uint8_t outcome, uint8_t reason, uint32_t seconds, bool manual, uint32_t at = 0);
+void processHistory();
+int  postHistory(const uint16_t* idx, uint16_t n);
 bool postEvent(const PendingEvent& e);
 
 // ── HTTP ──────────────────────────────────────────────────────────────────────
@@ -295,6 +313,7 @@ void setup() {
   pinMode(LED_PIN, OUTPUT);
   moistureBegin();
   loadSmart();
+  loadHistory();
   readMoisture(true);
   rainFilter.valid = true;   // se corrige con la primera lectura real
 
@@ -379,6 +398,12 @@ void setup() {
       doc["rtc"] = buf;
 
       // Sensor de lluvia (Sprint 7): "raining" ya descuenta el falso positivo
+      // Historial (Sprint 8): cuántos riegos guarda y cuántos faltan por sincronizar
+      JsonObject hs = doc["history"].to<JsonObject>();
+      hs["stored"]  = histLog.count;
+      hs["pending"] = histPending(histLog);
+      hs["lost"]    = histLog.lost;
+
       JsonObject rn = doc["rain"].to<JsonObject>();
       rn["valid"]   = rainFilter.valid;
       rn["raw"]     = rainFilter.raw;
@@ -583,6 +608,7 @@ void setup() {
       prefs.begin("aqua-auth",false);  prefs.clear(); prefs.end();
       prefs.begin("aqua-sched",false); prefs.clear(); prefs.end();
       prefs.begin("aqua-smart",false); prefs.clear(); prefs.end();
+      prefs.begin("aqua-hist",false);  prefs.clear(); prefs.end();
       prefs.begin("aqua-wifi",false);  prefs.clear(); prefs.end();
       logSecure("factory_reset_full");
       JsonDocument r; r["ok"]=true; r["message"]="Reset completo"; sendJson(200,r);
@@ -605,6 +631,7 @@ void setup() {
       prefs.begin("aqua-auth",false);  prefs.clear(); prefs.end();
       prefs.begin("aqua-sched",false); prefs.clear(); prefs.end();
       prefs.begin("aqua-smart",false); prefs.clear(); prefs.end();
+      prefs.begin("aqua-hist",false);  prefs.clear(); prefs.end();
       // NO borrar WiFi — solo desvincular token
       logSecure("reset_pin_ok");
       JsonDocument r; r["ok"]=true; r["message"]="Token borrado. Listo para vincular."; sendJson(200,r);
@@ -723,6 +750,7 @@ void loop() {
     checkSchedules();
     checkFaults();
     processEvents();
+    processHistory();
   }
   static unsigned long lastBlink=0;
   if (millis()-lastBlink > (currentMode==MODE_SETUP?500:3000)) { lastBlink=millis(); blinkLED(1); }
@@ -860,6 +888,7 @@ bool anyZoneActive() {
 void encenderZona(uint8_t z, bool manual, uint16_t minutes) {
   ZoneState& s=zones[z];
   s.active=true; s.manual=manual; s.fault=false;
+  s.histReason=HR_NONE;
   s.timed=minutes>0;
   s.startedAt=rtc.now();
   if (s.timed) s.stopAt=s.startedAt+TimeSpan(0,0,minutes,0);
@@ -873,13 +902,19 @@ void apagarZona(uint8_t z, bool notify) {
   ZoneState& s=zones[z];
   if (!s.active) return;
   uint16_t ran=(uint16_t)((rtc.now()-s.startedAt).totalseconds()/60);
+  uint32_t ranSec=(uint32_t)(rtc.now()-s.startedAt).totalseconds();
   bool wasManual=s.manual;
+  uint8_t histWhy=s.histReason;
   s.active=false; s.manual=false; s.timed=false;
   s.everStopped=true; s.stoppedMs=millis();   // inicia el tiempo de absorción
   lastWateringStopMs=millis(); wateredOnce=true; // inicia la ventana de falso positivo
   digitalWrite(ZONE_PINS[z],LOW);
   if (!PRODUCTION_MODE) Serial.printf("[Zona %d] OFF\n",z+1);
-  if (notify) queueEvent(EV_END,z+1,wasManual,ran);
+  if (notify) {
+    queueEvent(EV_END,z+1,wasManual,ran);
+    // Historial: reducido si el riego inteligente lo redujo, completado en otro caso
+    logHistory(z+1,histWhy==HR_NEAR?HO_REDUCED:HO_DONE,histWhy,ranSec,wasManual,s.startedAt.unixtime());
+  }
 }
 
 void apagarTodas(bool notify) {
@@ -929,6 +964,7 @@ void checkFaults() {
       s.fault=true;
       logSecure("valve_fault");
       queueEvent(EV_FAIL,z+1,wasManual,0);
+      logHistory(z+1,HO_FAILED,HR_VALVE,0,wasManual);
     }
   }
 }
@@ -998,18 +1034,22 @@ void runSmart(uint8_t z, uint16_t minutes) {
   switch (d.reason) {
     case SMART_WET:      // suelo con humedad suficiente: no se enciende
       queueEvent(EV_SKIP,z+1,false,0,pct,s.smart.threshold);
+      logHistory(z+1,HO_SKIPPED,HR_WET,0,false);
       break;
     case SMART_NEAR:
       encenderZona(z,false,d.minutes);
+      s.histReason=HR_NEAR;
       queueEvent(EV_REDUCE,z+1,false,d.minutes,pct,s.smart.threshold);
       break;
     case SMART_SENSOR:   // falla segura: se riega lo programado y se avisa
       logSecure("moisture_sensor_fault");
       encenderZona(z,false,d.minutes);
+      s.histReason=HR_SENSOR;
       queueEvent(EV_SENSOR,z+1,false,d.minutes);
       break;
     default:
       encenderZona(z,false,d.minutes);
+      if (d.reason==SMART_DRY) s.histReason=HR_DRY;
       break;
   }
 }
@@ -1043,6 +1083,7 @@ void startRainHold(uint8_t z, uint16_t minutes) {
   zones[z].hold={true,minutes,millis(),millis()+RAIN_RETRY_MS};
   Serial.printf("[Lluvia] Zona %d: riego pospuesto (llueve)\n",z+1);
   queueEvent(EV_POSTPONE,z+1,false,minutes);
+  logHistory(z+1,HO_POSTPONED,HR_RAIN,0,false);
 }
 
 void checkRainHolds() {
@@ -1056,6 +1097,7 @@ void checkRainHolds() {
     if (v==RAIN_CANCEL) {
       Serial.printf("[Lluvia] Zona %d: riego cancelado tras 2 h de lluvia\n",z+1);
       queueEvent(EV_CANCEL,z+1,false,s.hold.minutes);
+      logHistory(z+1,HO_CANCELLED,HR_RAIN,0,false);
       continue;
     }
     // Ya no llueve: sigue la regla de humedad y, si aplica, la absorción
@@ -1128,6 +1170,95 @@ bool postEvent(const PendingEvent& e) {
   if (!PRODUCTION_MODE) Serial.printf("[Avisos] %s zona %d -> HTTP %d\n",TYPES[e.type],e.zone,code);
   // 4xx = petición rechazada (token o datos): reintentar no sirve
   return (code>=200&&code<300)||(code>=400&&code<500);
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  HISTORIAL DE RIEGOS (Sprint 8, HU-14) — reglas en history_log.h
+//  Cada riego se guarda en la memoria del ESP32 (NVS) y, cuando hay Internet,
+//  se envía por lotes a la Cloud Function deviceHistory. El servidor no
+//  duplica un riego que ya recibió, así que reenviar es seguro.
+// ══════════════════════════════════════════════════════════════════════════════
+void loadHistory() {
+  histInit(histLog);
+  prefs.begin("aqua-hist",true);
+  if (prefs.getInt("ver",0)==HIST_VERSION &&
+      prefs.getBytesLength("log")==sizeof(HistLog)) {
+    HistLog tmp;
+    prefs.getBytes("log",&tmp,sizeof(HistLog));
+    if (histSane(tmp)) histLog=tmp;
+  }
+  prefs.end();
+  Serial.printf("[Historial] %d riegos guardados, %d por sincronizar\n",histLog.count,histPending(histLog));
+  if (strlen(HISTORY_URL)==0) Serial.println(F("[Historial] HISTORY_URL vacia: solo se guarda en el ESP32"));
+}
+
+void saveHistory() {
+  prefs.begin("aqua-hist",false);
+  prefs.putInt("ver",HIST_VERSION);
+  prefs.putBytes("log",&histLog,sizeof(HistLog));
+  prefs.end();
+}
+
+// Registra un riego. at = hora local de inicio (0 = ahora).
+void logHistory(uint8_t zone, uint8_t outcome, uint8_t reason, uint32_t seconds, bool manual, uint32_t at) {
+  if (at==0) at=rtc.now().unixtime();
+  if (!histAdd(histLog,at,zone,outcome,reason,seconds,manual)) return;
+  saveHistory();
+  if (!PRODUCTION_MODE) Serial.printf("[Historial] Zona %d: %s (%s) %lu s\n",
+    zone,histOutcomeName(outcome),histReasonName(reason),(unsigned long)seconds);
+}
+
+// Envía un lote por iteración del loop. Un reenvío no duplica registros.
+void processHistory() {
+  if (strlen(HISTORY_URL)==0||authToken.isEmpty()||WiFi.status()!=WL_CONNECTED) return;
+  if ((long)(millis()-histNextTryMs)<0) return;
+  uint16_t idx[HIST_MAX_BATCH];
+  uint16_t n=histCollect(histLog,idx,HIST_MAX_BATCH);
+  if (n==0) return;
+
+  int code=postHistory(idx,n);
+  if (code>=200&&code<300) {
+    for (uint16_t k=0;k<n;k++) histMarkSent(histLog,idx[k]);
+    saveHistory();
+    histNextTryMs=millis()+HISTORY_NEXT_MS;
+  } else if (code>=400&&code<500&&code!=401&&code!=403&&code!=429) {
+    // El servidor rechazó los datos: reintentar no sirve y bloquearía los demás
+    for (uint16_t k=0;k<n;k++) histMarkSent(histLog,idx[k]);
+    saveHistory();
+    logSecure("history_rejected");
+    histNextTryMs=millis()+HISTORY_NEXT_MS;
+  } else {
+    histNextTryMs=millis()+HISTORY_RETRY_MS;   // sin Internet, token o servidor: más tarde
+  }
+}
+
+// Devuelve el código HTTP (o un valor <= 0 si no hubo respuesta).
+int postHistory(const uint16_t* idx, uint16_t n) {
+  WiFiClientSecure client;
+  client.setCACert(GOOGLE_ROOT_CAS);
+  client.setTimeout(8);
+  HTTPClient http;
+  if (!http.begin(client,HISTORY_URL)) return -1;
+  http.setTimeout(8000);
+  http.addHeader("Content-Type","application/json");
+  http.addHeader("Authorization","Bearer "+authToken);
+
+  JsonDocument d;
+  d["uid"]=linkedUID; d["device"]=getDeviceShortId();
+  JsonArray arr=d["records"].to<JsonArray>();
+  for (uint16_t k=0;k<n;k++) {
+    const HistRecord& r=histAt(histLog,idx[k]);
+    JsonObject o=arr.add<JsonObject>();
+    o["at"]=r.at; o["zone"]=r.zone;
+    o["outcome"]=histOutcomeName(r.outcome); o["reason"]=histReasonName(r.reason);
+    o["seconds"]=r.seconds; o["manual"]=(r.manual==1);
+  }
+  String body; serializeJson(d,body);
+
+  int code=http.POST(body);
+  http.end();
+  if (!PRODUCTION_MODE) Serial.printf("[Historial] Enviados %d riegos -> HTTP %d\n",n,code);
+  return code;
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
