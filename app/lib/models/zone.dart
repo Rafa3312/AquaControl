@@ -14,6 +14,22 @@ class Zones {
 
   static String defaultName(int id) => 'Zona $id';
 
+  /// Caudal por defecto (L/min), el nominal del fabricante. Medido con una
+  /// cubeta suele ser menor, por eso cada zona lo puede ajustar (Sprint 8).
+  static const double defaultFlowLpm = 8.0;
+  static const double minFlowLpm = 1.0;
+  static const double maxFlowLpm = 30.0;
+
+  /// Devuelve un mensaje de error o null si el caudal es válido.
+  static String? validateFlow(double? flow) {
+    if (flow == null || flow.isNaN) return 'Escribe el caudal en litros por minuto';
+    if (flow < minFlowLpm || flow > maxFlowLpm) {
+      return 'El caudal debe estar entre ${minFlowLpm.toStringAsFixed(0)} y '
+          '${maxFlowLpm.toStringAsFixed(0)} L/min';
+    }
+    return null;
+  }
+
   /// Devuelve un mensaje de error o null si el nombre es válido.
   static String? validateName(String name) {
     final value = name.trim();

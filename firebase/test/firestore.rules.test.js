@@ -38,6 +38,8 @@ beforeEach(async () => {
     const db = ctx.firestore();
     await setDoc(doc(db, 'devices/alicia'), { uid: 'alicia', token: TOKEN, ip: '192.168.1.50' });
     await setDoc(doc(db, 'users/alicia/notifications/n1'), { type: 'fail', zone: 1 });
+    await setDoc(doc(db, 'users/alicia/history/h1'), { zone: 1, outcome: 'done', seconds: 600 });
+    await setDoc(doc(db, 'users/alicia/dailyStats/2026-10-21'), { date: '2026-10-21', zones: { 1: { runs: 1, seconds: 600 } } });
   });
 });
 
@@ -131,4 +133,50 @@ test('nadie puede crear avisos desde la app (solo la Cloud Function)', async () 
 
 test('otro usuario no puede leer los avisos ajenos', async () => {
   await assertFails(getDoc(doc(as('beto'), 'users/alicia/notifications/n1')));
+});
+
+// ── Caudal de cada zona (Sprint 8) ────────────────────────────────────────────
+test('el dueño guarda el caudal de su zona entre 1 y 30 L/min', async () => {
+  const db = as('alicia');
+  await assertSucceeds(setDoc(doc(db, 'users/alicia/zones/1'), { flowLpm: 7.2 }, { merge: true }));
+  await assertSucceeds(setDoc(doc(db, 'users/alicia/zones/2'), { flowLpm: 1 }, { merge: true }));
+  await assertSucceeds(setDoc(doc(db, 'users/alicia/zones/2'), { flowLpm: 30 }, { merge: true }));
+});
+
+test('rechaza un caudal fuera de rango o que no es número', async () => {
+  const db = as('alicia');
+  await assertFails(setDoc(doc(db, 'users/alicia/zones/1'), { flowLpm: 0.9 }));
+  await assertFails(setDoc(doc(db, 'users/alicia/zones/1'), { flowLpm: 30.1 }));
+  await assertFails(setDoc(doc(db, 'users/alicia/zones/1'), { flowLpm: '8' }));
+});
+
+test('otro usuario no puede cambiar el caudal ajeno', async () => {
+  await assertFails(setDoc(doc(as('beto'), 'users/alicia/zones/1'), { flowLpm: 5 }));
+});
+
+// ── Historial y resúmenes (Sprint 8) ──────────────────────────────────────────
+test('el dueño lee su historial y sus resúmenes diarios', async () => {
+  const db = as('alicia');
+  await assertSucceeds(getDoc(doc(db, 'users/alicia/history/h1')));
+  await assertSucceeds(getDoc(doc(db, 'users/alicia/dailyStats/2026-10-21')));
+});
+
+test('otro usuario no puede leer el historial ni los resúmenes ajenos', async () => {
+  const db = as('beto');
+  await assertFails(getDoc(doc(db, 'users/alicia/history/h1')));
+  await assertFails(getDoc(doc(db, 'users/alicia/dailyStats/2026-10-21')));
+});
+
+test('sin sesión no se lee el historial', async () => {
+  const db = env.unauthenticatedContext().firestore();
+  await assertFails(getDoc(doc(db, 'users/alicia/history/h1')));
+});
+
+test('ni el dueño puede crear, cambiar o borrar historial (solo la Cloud Function)', async () => {
+  const db = as('alicia');
+  await assertFails(setDoc(doc(db, 'users/alicia/history/h2'), { zone: 1, outcome: 'done', seconds: 99999 }));
+  await assertFails(setDoc(doc(db, 'users/alicia/history/h1'), { seconds: 1 }, { merge: true }));
+  await assertFails(deleteDoc(doc(db, 'users/alicia/history/h1')));
+  await assertFails(setDoc(doc(db, 'users/alicia/dailyStats/2026-10-22'), { date: '2026-10-22' }));
+  await assertFails(deleteDoc(doc(db, 'users/alicia/dailyStats/2026-10-21')));
 });

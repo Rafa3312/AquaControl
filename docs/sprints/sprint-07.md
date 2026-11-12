@@ -79,6 +79,6 @@ con valores simulados y tabla de prioridades (lluvia → humedad → programaci�
 ## Pendientes
 
 - Validar con **lluvia real** en exterior, con el sensor junto a la maceta (tarea de arrastre
-  para el Sprint 8).
+  que se cerró en el Sprint 8, SB8-06).
 - Calibrar `RAIN_WET_RAW` (en `rain_logic.h`) con el sensor real.
 - Desplegar la función `deviceEvent` (plan Blaze) para que lleguen los avisos reales.

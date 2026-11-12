@@ -1,6 +1,6 @@
 rules_version = '2';
 
-// Reglas de seguridad de AquaControl (Sprints 5 y 6).
+// Reglas de seguridad de AquaControl (Sprints 5, 6 y 8).
 // Principio: cada usuario solo accede a sus propios datos (mínimo privilegio)
 // y la app no es frontera de confianza: aquí se valida el formato de lo que escribe.
 service cloud.firestore {
@@ -35,14 +35,15 @@ service cloud.firestore {
         && request.resource.data.notificationsEnabled is bool;
       allow delete: if isOwner(uid);
 
-      // Cada zona de riego (solo existen la 1 y la 2): su nombre (Sprint 5) y
-      // su riego inteligente (Sprint 6). El umbral usa el mismo rango que la
-      // app y el firmware: 10% a 90%.
+      // Cada zona de riego (solo existen la 1 y la 2): su nombre (Sprint 5), su
+      // riego inteligente (Sprint 6) y su caudal en L/min para estimar el
+      // consumo (Sprint 8). El umbral usa el mismo rango que la app y el
+      // firmware: 10% a 90%; el caudal, de 1 a 30 L/min.
       match /zones/{zoneId} {
         allow read, delete: if isOwner(uid);
         allow create, update: if isOwner(uid)
           && zoneId in ['1', '2']
-          && request.resource.data.keys().hasOnly(['name', 'updatedAt', 'smartEnabled', 'threshold'])
+          && request.resource.data.keys().hasOnly(['name', 'updatedAt', 'smartEnabled', 'threshold', 'flowLpm'])
           && (!('name' in request.resource.data)
               || (request.resource.data.name is string
                   && request.resource.data.name.size() > 0
@@ -52,7 +53,11 @@ service cloud.firestore {
           && (!('threshold' in request.resource.data)
               || (request.resource.data.threshold is int
                   && request.resource.data.threshold >= 10
-                  && request.resource.data.threshold <= 90));
+                  && request.resource.data.threshold <= 90))
+          && (!('flowLpm' in request.resource.data)
+              || (request.resource.data.flowLpm is number
+                  && request.resource.data.flowLpm >= 1
+                  && request.resource.data.flowLpm <= 30));
       }
 
       // Tokens FCM: solo con consentimiento previo del usuario
@@ -62,6 +67,20 @@ service cloud.firestore {
           && hasConsent(uid)
           && request.resource.data.keys().hasOnly(['platform', 'createdAt'])
           && request.resource.data.platform in ['android', 'ios'];
+      }
+
+      // Historial de riegos y resúmenes diarios (Sprint 8): solo los escribe la
+      // Cloud Function deviceHistory (Admin SDK). El dueño los lee; no puede
+      // crearlos ni alterarlos, así que nadie falsea su consumo. Los registros
+      // caducan a los 12 meses con la política TTL del campo expireAt.
+      match /history/{recordId} {
+        allow read: if isOwner(uid);
+        allow write: if false;
+      }
+
+      match /dailyStats/{date} {
+        allow read: if isOwner(uid);
+        allow write: if false;
       }
 
       // Avisos de riego: solo los escribe la Cloud Function (Admin SDK)

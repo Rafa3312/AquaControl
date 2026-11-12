@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 import 'theme/app_theme.dart';
 import 'providers/auth_provider.dart';
 import 'providers/device_provider.dart';
+import 'providers/history_provider.dart';
 import 'providers/irrigation_provider.dart';
 import 'providers/notification_provider.dart';
 import 'providers/schedule_provider.dart';
@@ -142,6 +143,7 @@ class _AquaControlAppState extends State<AquaControlApp>
         ChangeNotifierProvider.value(value: _scheduleProvider),
         ChangeNotifierProvider(create: (_) => ZoneProvider()),
         ChangeNotifierProvider(create: (_) => NotificationProvider()),
+        ChangeNotifierProvider(create: (_) => HistoryProvider()),
         ChangeNotifierProvider.value(value: _smartProvider),
       ],
       child: MaterialApp(
