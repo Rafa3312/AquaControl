@@ -61,8 +61,8 @@ Avisos a la función `deviceEvent`: tipos nuevos `skip`, `reduce` y `sensor`, co
 |---|---|---|---|
 | Criterios de HU-10, contrato, modelo y provider de la app, reglas de Firestore, Cloud Function y pruebas base | Rafael Sámano | `feature/sprint-06-riego-inteligente` | Terminado |
 | SB6-01 Sensor de humedad: lectura, calibración y filtrado (`moisture.h`) | Edgar Suárez | `feature/sprint-06-sensor-humedad` | Terminado (PR #16) |
-| SB6-02 y SB6-04 Lógica de ajuste en el firmware v3.3, umbral validado, absorción y falla segura | Esryil Vidales | `feature/sprint-06-logica-riego` | Pendiente de integrar: PR abierto desde esta rama |
-| SB6-03 Tarjeta de humedad en el Dashboard y pantalla de configuración | Milton Becerra | `feature/sprint-06-humedad-app` | En revisión (PR #19; se conectó la tarjeta y la pantalla que faltaban) |
+| SB6-02 y SB6-04 Lógica de ajuste en el firmware v3.3, umbral validado, absorción y falla segura | Esryil Vidales | `feature/sprint-06-logica-riego` | Terminado (PR #20) |
+| SB6-03 Tarjeta de humedad en el Dashboard y pantalla de configuración | Milton Becerra | `feature/sprint-06-humedad-app` | Terminado (PR #19) |
 | SB6-05 Pruebas con valores de humedad simulados (10 pruebas) | Kevin Colín | `feature/sprint-06-pruebas-humedad` | Terminado (PR #18) |
 | SB6-06 Decisión sobre el push en iOS | Uriel Romero | `feature/sprint-06-push-ios` | Terminado (PR #17) |
 
