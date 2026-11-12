@@ -13,6 +13,8 @@ const {
   tokensEqual,
   validateEvent,
 } = require('./lib/notifications');
+const { validateBatch } = require('./lib/history');
+const { saveRecords } = require('./lib/history_store');
 
 initializeApp();
 const db = getFirestore();
@@ -99,6 +101,52 @@ exports.deviceEvent = onRequest({ region: 'us-central1', maxInstances: 5 }, asyn
     res.json({ ok: true, sent });
   } catch (err) {
     logger.error('Error al procesar el aviso', { uid: event.uid, error: err.message });
+    res.status(500).json({ ok: false, error: 'Error interno' });
+  }
+});
+
+/**
+ * Recibe el historial de riegos que guarda el ESP32 en su memoria (Sprint 8,
+ * HU-14) y lo escribe en users/{uid}/history y en el resumen diario
+ * users/{uid}/dailyStats (HU-16).
+ *
+ * Es idempotente: cada riego tiene un identificador propio (hora, zona y
+ * resultado). Si el ESP32 reenvía un lote después de una desconexión, los
+ * riegos que ya existen se cuentan como duplicados y no se suman dos veces.
+ */
+exports.deviceHistory = onRequest({ region: 'us-central1', maxInstances: 5 }, async (req, res) => {
+  if (req.method !== 'POST') {
+    res.status(405).json({ ok: false, error: 'Método no permitido' });
+    return;
+  }
+
+  const token = bearerToken(req.get('Authorization'));
+  if (!token) {
+    res.status(401).json({ ok: false, error: 'Token requerido' });
+    return;
+  }
+
+  const parsed = validateBatch(req.body);
+  if (!parsed.ok) {
+    res.status(400).json({ ok: false, error: parsed.error });
+    return;
+  }
+  const { uid, device, records } = parsed.batch;
+
+  try {
+    const owner = await db.doc(`devices/${uid}`).get();
+    if (!owner.exists || !tokensEqual(token, owner.get('token'))) {
+      logger.warn('Historial rechazado: dispositivo no autorizado', { uid });
+      res.status(401).json({ ok: false, error: 'Dispositivo no autorizado' });
+      return;
+    }
+
+    const { saved, duplicates } = await saveRecords(db, FieldValue, uid, device, records);
+
+    logger.info('Historial procesado', { uid, saved, duplicates });
+    res.json({ ok: true, saved, duplicates });
+  } catch (err) {
+    logger.error('Error al procesar el historial', { uid, error: err.message });
     res.status(500).json({ ok: false, error: 'Error interno' });
   }
 });
