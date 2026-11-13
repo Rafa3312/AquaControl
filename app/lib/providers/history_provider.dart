@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart';
 import '../models/irrigation_record.dart';
 import '../models/water_stats.dart';
 import '../models/zone.dart';
+import '../utils/demo_history.dart';
 
 /// Historial de riegos y estadísticas de consumo (Sprint 8, HU-14 y HU-16).
 ///
@@ -30,6 +31,9 @@ class HistoryProvider extends ChangeNotifier {
   List<IrrigationRecord> _records = [];
   List<DailyStat> _days = [];
   final Map<int, double> _flows = {};
+
+  // Modo demostración: datos simulados solo en memoria (no toca Firestore)
+  DemoHistory? _demo;
 
   StreamSubscription<String?>? _authSub;
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _historySub;
@@ -57,11 +61,23 @@ class HistoryProvider extends ChangeNotifier {
 
   /// Riegos del periodo (y de la zona elegida), del más reciente al más antiguo.
   List<IrrigationRecord> get records => List.unmodifiable(
-        _records.where((r) => _zone == null || r.zone == _zone),
+        _source.where((r) => _zone == null || r.zone == _zone),
       );
 
+  /// Modo demostración: la pantalla muestra 6 meses de riegos simulados.
+  bool get demo => _demo != null;
+
+  /// Riegos del periodo: los de Firestore o, en demostración, los simulados
+  /// del mismo periodo.
+  List<IrrigationRecord> get _source {
+    final demo = _demo;
+    if (demo == null) return _records;
+    final start = _period.range(_clock()).startInstant;
+    return demo.records.where((r) => !r.startAt.isBefore(start)).take(listLimit).toList();
+  }
+
   /// Si la lista llegó al límite: puede haber riegos más antiguos sin mostrar.
-  bool get truncated => _records.length >= listLimit;
+  bool get truncated => _source.length >= listLimit;
 
   /// Caudal (L/min) de una zona: el ajustado o el nominal.
   double flowOf(int zone) => _flows[zone] ?? Zones.defaultFlowLpm;
@@ -70,7 +86,7 @@ class HistoryProvider extends ChangeNotifier {
   WaterStats get stats => WaterStats.compute(
         period: _period,
         now: _clock(),
-        days: _days,
+        days: _demo?.days ?? _days,
         flowLpm: {for (final z in Zones.ids) z: flowOf(z)},
         zone: _zone,
       );
@@ -78,6 +94,25 @@ class HistoryProvider extends ChangeNotifier {
   void setPeriod(HistoryPeriod period) {
     if (period == _period) return;
     _period = period;
+    _subscribe();
+    notifyListeners();
+  }
+
+  /// Carga datos simulados (6 meses) para la demostración del Sprint 8. No
+  /// escribe en Firestore: se descartan al salir o al cerrar sesión.
+  void enableDemo() {
+    _historySub?.cancel();
+    _dailySub?.cancel();
+    _demo = DemoHistory.generate(now: _clock());
+    _loading = false;
+    _error = null;
+    notifyListeners();
+  }
+
+  /// Vuelve a los datos reales del usuario.
+  void disableDemo() {
+    if (_demo == null) return;
+    _demo = null;
     _subscribe();
     notifyListeners();
   }
@@ -93,6 +128,11 @@ class HistoryProvider extends ChangeNotifier {
     final error = Zones.validateFlow(flow);
     if (error != null) return error;
     if (!Zones.isValid(zone)) return 'Zona inválida';
+    if (_demo != null) {
+      _flows[zone] = flow!; // demostración: el caudal no se guarda en Firestore
+      notifyListeners();
+      return null;
+    }
     final uid = _uid;
     if (uid == null) return 'No hay sesión activa';
     try {
@@ -111,6 +151,7 @@ class HistoryProvider extends ChangeNotifier {
   Future<void> _onUser(String? uid) async {
     await _zonesSub?.cancel();
     _uid = uid;
+    _demo = null;
     _records = [];
     _days = [];
     _flows.clear();
@@ -145,7 +186,7 @@ class HistoryProvider extends ChangeNotifier {
     final uid = _uid;
     _historySub?.cancel();
     _dailySub?.cancel();
-    if (uid == null) return;
+    if (uid == null || _demo != null) return;
 
     final range = _period.range(_clock());
     _loading = true;

@@ -161,4 +161,27 @@ void main() {
     expect(find.textContaining('El caudal debe estar entre 1 y 30'), findsOneWidget);
     expect(history.flowOf(1), 8.0);
   });
+
+  testWidgets('el menú carga datos de demostración y se puede salir', (tester) async {
+    await tester.binding.setSurfaceSize(const Size(400, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    await pumpTab(tester);
+    expect(find.textContaining('Modo demostración'), findsNothing);
+
+    await tester.tap(find.byTooltip('Más opciones'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Cargar datos de demostración'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Modo demostración'), findsOneWidget);
+    expect(find.text('Sin registros en este periodo'), findsNothing);
+    expect(find.text('Sin consumo en este periodo'), findsNothing);
+    expect(history.demo, isTrue);
+
+    await tester.tap(find.text('Salir'));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('Modo demostración'), findsNothing);
+    expect(history.demo, isFalse);
+  });
 }
