@@ -104,6 +104,14 @@ Acciones de mejora del Sprint 7 aplicadas: datos de prueba de varios meses
 (`firebase/functions/scripts/seed-history.js`), criterios escritos antes del Planning y la
 validación con lluvia real como tarea de arrastre.
 
+## Modo demostración (para la Sprint Review)
+
+En **Reportes → menú ⋮ → Cargar datos de demostración** la app muestra 6 meses de riegos
+simulados (completados, reducidos, omitidos, pospuestos y cancelados por lluvia, fallas, riegos
+manuales y uno a las 23:30), con tarjetas, gráfica, filtros y "Ajustar caudal" funcionando. Los
+datos viven solo en memoria: **no se escriben en Firestore** y se descartan al tocar "Salir" o
+al cerrar sesión. Un aviso amarillo indica que no son riegos reales.
+
 ## Datos de prueba de varios meses
 
 ```bash

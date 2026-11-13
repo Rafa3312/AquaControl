@@ -22,18 +22,36 @@ class ReportsTab extends StatelessWidget {
       backgroundColor: AppTheme.bgPrimary,
       body: CustomScrollView(
         slivers: [
-          const SliverAppBar(
+          SliverAppBar(
             backgroundColor: AppTheme.bgPrimary,
             floating: true,
             snap: true,
             elevation: 0,
             scrolledUnderElevation: 0,
-            title: Text('Reportes'),
+            title: const Text('Reportes'),
+            actions: [
+              PopupMenuButton<bool>(
+                tooltip: 'Más opciones',
+                color: AppTheme.bgCard,
+                icon: const Icon(Icons.more_vert_rounded),
+                onSelected: (on) => on ? history.enableDemo() : history.disableDemo(),
+                itemBuilder: (_) => [
+                  PopupMenuItem(
+                    value: !history.demo,
+                    child: Text(history.demo ? 'Salir de la demostración' : 'Cargar datos de demostración'),
+                  ),
+                ],
+              ),
+            ],
           ),
           SliverPadding(
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 20),
             sliver: SliverList(
               delegate: SliverChildListDelegate([
+                if (history.demo) ...[
+                  _DemoBanner(onExit: history.disableDemo),
+                  const SizedBox(height: 16),
+                ],
                 _PeriodChips(history: history),
                 const SizedBox(height: 12),
                 _ZoneChips(history: history, names: names),
@@ -56,6 +74,37 @@ class ReportsTab extends StatelessWidget {
 
 // Color de cada zona en la gráfica y la lista
 Color _zoneColor(int zone) => zone == 1 ? AppTheme.primary : AppTheme.accent;
+
+/// Aviso de que se están viendo datos simulados (demostración del Sprint 8).
+class _DemoBanner extends StatelessWidget {
+  final VoidCallback onExit;
+  const _DemoBanner({required this.onExit});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(14, 10, 8, 10),
+      decoration: BoxDecoration(
+        color: AppTheme.warning.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppTheme.warning.withValues(alpha: 0.5)),
+      ),
+      child: Row(
+        children: [
+          const Icon(Icons.science_outlined, color: AppTheme.warning, size: 20),
+          const SizedBox(width: 10),
+          const Expanded(
+            child: Text(
+              'Modo demostración: datos simulados de 6 meses. No son tus riegos reales.',
+              style: TextStyle(color: AppTheme.textSecondary, fontSize: 12, height: 1.4),
+            ),
+          ),
+          TextButton(onPressed: onExit, child: const Text('Salir', style: TextStyle(fontSize: 12))),
+        ],
+      ),
+    );
+  }
+}
 
 // ── Filtros ──────────────────────────────────────────────────────────────────
 class _PeriodChips extends StatelessWidget {
